@@ -81,10 +81,13 @@ class MongoRateLimiter:
 
     def _check_and_record(self, key: str) -> None:
         """Atomically increment the counter for *key* and raise 429 if over limit."""
-        now = datetime.now(timezone.utc)
-        # Truncate to the start of the current fixed window (e.g. minute boundary)
-        window_start = now - timedelta(seconds=now.timestamp() % self.window_seconds)
-        expires_at = window_start + timedelta(seconds=self.window_seconds * 2)  # buffer
+        from pymongo import ReturnDocument
+
+        # Integer-based epoch calculation guarantees 0 microsecond drift across requests
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        window_start_ts = now_ts - (now_ts % self.window_seconds)
+        window_start = datetime.fromtimestamp(window_start_ts, tz=timezone.utc)
+        expires_at = window_start + timedelta(seconds=self.window_seconds * 2)
 
         col = self._get_col()
         try:
@@ -99,7 +102,7 @@ class MongoRateLimiter:
                     },
                 },
                 upsert=True,
-                return_document=True,  # returns the document AFTER the update
+                return_document=ReturnDocument.AFTER,
             )
             count = result.get("count", 1) if result else 1
         except Exception as exc:
