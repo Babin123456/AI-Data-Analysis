@@ -4,13 +4,14 @@ validated + executed query -> plain-English explanation + chart.
 from __future__ import annotations
 
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.db.duckdb_manager import duckdb_manager
 from app.models.schemas import ChatRequest, ChatResponse
 from app.services.chart_service import build_chart_spec, select_chart_type
 from app.services.llm_service import LLMServiceError, llm_service
 from app.services.schema_service import extract_all_schemas
+from app.utils.rate_limit import chat_limiter
 from app.validation.sql_validator import SQLValidationError, validate_sql
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,10 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
 @router.post("", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
+async def chat(req: ChatRequest, request: Request) -> ChatResponse:
+    # Apply Rate limiting (max 15 chat queries per minute per IP)
+    client_ip = request.client.host if request.client else "unknown"
+    chat_limiter.check_rate_limit(ip=client_ip)
     try:
         conn = duckdb_manager.get_connection(req.dataset_id)
     except KeyError as exc:

@@ -115,11 +115,12 @@ class MongoRateLimiter:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=(
-                    f"Too many login attempts. "
+                    f"Too many requests. "
                     f"Please wait {self.window_seconds} seconds before trying again."
                 ),
             )
 
 
-# ── Singleton: 5 login attempts per 60 s — shared across all workers ──────────
+# ── Singletons — shared across all workers via MongoDB ────────────────────────
 login_limiter = MongoRateLimiter(max_requests=5, window_seconds=60)
+chat_limiter = MongoRateLimiter(max_requests=15, window_seconds=60)
