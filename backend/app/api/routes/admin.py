@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from app.config import settings
@@ -14,6 +14,7 @@ from app.db.duckdb_manager import duckdb_manager
 from app.db.mongodb import db, client
 from app.utils.auth import create_access_token, get_current_user, verify_password
 from app.utils.logger_streamer import memory_log_handler
+from app.utils.rate_limit import login_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict
 
 # ── 1. Admin Login Endpoint ────────────────────────────────────────────────────
 @router.post("/login")
-async def admin_login(payload: AdminLoginRequest) -> dict[str, Any]:
+async def admin_login(payload: AdminLoginRequest, request: Request) -> dict[str, Any]:
     """Login for admin users (including demo admin).
 
     All credentials are verified against MongoDB — the demo admin account is
@@ -50,6 +51,10 @@ async def admin_login(payload: AdminLoginRequest) -> dict[str, Any]:
     """
     email_clean = payload.email.strip().lower()
     password = payload.password.strip()
+
+    # Rate limiting: max 5 login attempts per 60s per IP + user email
+    client_ip = request.client.host if request.client else "unknown"
+    login_limiter.check_rate_limit(ip=client_ip, username=email_clean)
 
     # Fetch admin user from MongoDB by email
     users_col = db["users"]
