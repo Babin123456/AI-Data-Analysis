@@ -37,7 +37,7 @@ class Settings:
 
     # MongoDB Config
     mongodb_uri: str = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-    database_name: str = os.getenv("DATABASE_NAME", "eduassist")
+    database_name: str = os.getenv("DATABASE_NAME", "Ai-data-analyst")
 
     # JWT Config
     secret_key: str = os.getenv("SECRET_KEY", "your-secret-key")
