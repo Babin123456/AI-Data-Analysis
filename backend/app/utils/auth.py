@@ -74,11 +74,13 @@ async def get_current_user(token: str | None = Depends(oauth2_scheme)) -> dict:
     user = None
     # Special handling for demo admin user
     if username == "admin_demo" or payload.get("role") == "admin":
-        user = db["users"].find_one({"$or": [{"username": username}, {"email": "admin@demo.com"}]})
+        from app.config import settings  # noqa: PLC0415
+        demo_email = settings.demo_admin_email.strip().lower()
+        user = db["users"].find_one({"$or": [{"username": username}, {"email": demo_email}]})
         if not user:
             user = {
                 "username": "Admin Demo",
-                "email": "admin@demo.com",
+                "email": demo_email,
                 "role": "admin",
                 "is_admin": True,
                 "is_verified": True,

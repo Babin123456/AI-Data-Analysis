@@ -30,7 +30,8 @@ async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict
     role = current_user.get("role", "user")
     is_admin = current_user.get("is_admin", False) or role == "admin"
     # Allow demo admin account as well
-    if current_user.get("email") == "admin@demo.com" or is_admin:
+    demo_email = settings.demo_admin_email.strip().lower()
+    if current_user.get("email", "").strip().lower() == demo_email or is_admin:
         return current_user
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -44,16 +45,22 @@ async def admin_login(payload: AdminLoginRequest) -> dict[str, Any]:
     email_clean = payload.email.strip().lower()
     password = payload.password.strip()
 
-    # Demo Admin Account check
-    if email_clean == "admin@demo.com" and password == "admin123":
+    # ── Demo Admin Account check (credentials from .env, never hardcoded) ──
+    demo_email = settings.demo_admin_email.strip().lower()
+    demo_password = settings.demo_admin_password
+
+    if not demo_password:
+        # Safety guard: if DEMO_ADMIN_PASSWORD is not set, demo login is disabled
+        logger.warning("DEMO_ADMIN_PASSWORD is not set in .env — demo admin login is disabled.")
+    elif email_clean == demo_email and password == demo_password:
         users_col = db["users"]
-        demo_user = users_col.find_one({"email": "admin@demo.com"})
+        demo_user = users_col.find_one({"email": demo_email})
         if not demo_user:
             from app.utils.auth import hash_password
             demo_doc = {
                 "username": "admin_demo",
-                "email": "admin@demo.com",
-                "hashed_password": hash_password("admin123"),
+                "email": demo_email,
+                "hashed_password": hash_password(demo_password),
                 "role": "admin",
                 "is_admin": True,
                 "is_active": True,
@@ -64,7 +71,7 @@ async def admin_login(payload: AdminLoginRequest) -> dict[str, Any]:
 
         from app.utils.session_tracker import active_session_tracker
         active_session_tracker.record_activity(
-            user_id_or_email="admin@demo.com",
+            user_id_or_email=demo_email,
             username="Admin Demo",
             role="admin",
         )
@@ -75,7 +82,7 @@ async def admin_login(payload: AdminLoginRequest) -> dict[str, Any]:
             "token_type": "bearer",
             "user": {
                 "username": "Admin Demo",
-                "email": "admin@demo.com",
+                "email": demo_email,
                 "role": "admin",
                 "is_admin": True,
             },

@@ -51,6 +51,12 @@ def init_db():
         groq_usage = db["groq_usage"]
         groq_usage.create_index("date", unique=True)
 
+        # Rate limiter collection (MongoDB-backed, multi-worker safe)
+        # TTL index auto-deletes expired windows; compound index speeds up lookups.
+        rate_limits = db["rate_limits"]
+        rate_limits.create_index("expires_at", expireAfterSeconds=0)
+        rate_limits.create_index([("key", 1), ("window_start", 1)])
+
         logger.info("MongoDB unique, performance, and TTL indexes initialized successfully.")
 
         # ── Seed the Bloom Filter ──────────────────────────────────────────────

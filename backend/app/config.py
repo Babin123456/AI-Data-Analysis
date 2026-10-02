@@ -62,5 +62,9 @@ class Settings:
     firebase_client_email: str = os.getenv("FIREBASE_CLIENT_EMAIL", "")
     firebase_private_key: str = os.getenv("FIREBASE_PRIVATE_KEY", "").replace("\\n", "\n")
 
+    # Demo Admin Account (credentials configurable via .env — never hardcoded)
+    demo_admin_email: str = os.getenv("DEMO_ADMIN_EMAIL", "admin@demo.com")
+    demo_admin_password: str = os.getenv("DEMO_ADMIN_PASSWORD", "")
+
 
 settings = Settings()
