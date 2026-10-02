@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.db.duckdb_manager import duckdb_manager
 from app.db.mongodb import db, client
-from app.utils.auth import create_access_token, get_current_user
+from app.utils.auth import create_access_token, get_current_user, verify_password
 from app.utils.logger_streamer import memory_log_handler
 
 logger = logging.getLogger(__name__)
@@ -39,68 +39,23 @@ async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict
     )
 
 
-# ── 1. Admin Login Endpoint (with Demo quick login) ───────────────────────────
+# ── 1. Admin Login Endpoint ────────────────────────────────────────────────────
 @router.post("/login")
 async def admin_login(payload: AdminLoginRequest) -> dict[str, Any]:
+    """Login for admin users (including demo admin).
+
+    All credentials are verified against MongoDB — the demo admin account is
+    seeded into the database on first startup by init_db(), so no special-casing
+    is needed here. Login is identical for all admin accounts.
+    """
     email_clean = payload.email.strip().lower()
     password = payload.password.strip()
 
-    # ── Demo Admin Account check (credentials from .env, never hardcoded) ──
-    demo_email = settings.demo_admin_email.strip().lower()
-    demo_password = settings.demo_admin_password
-
-    if not demo_password:
-        # Safety guard: if DEMO_ADMIN_PASSWORD is not set, demo login is disabled
-        logger.warning("DEMO_ADMIN_PASSWORD is not set in .env — demo admin login is disabled.")
-    elif email_clean == demo_email and password == demo_password:
-        users_col = db["users"]
-        demo_user = users_col.find_one({"email": demo_email})
-        if not demo_user:
-            from app.utils.auth import hash_password
-            demo_doc = {
-                "username": "admin_demo",
-                "email": demo_email,
-                "hashed_password": hash_password(demo_password),
-                "role": "admin",
-                "is_admin": True,
-                "is_active": True,
-                "is_verified": True,
-                "created_at": datetime.utcnow(),
-            }
-            users_col.insert_one(demo_doc)
-
-        from app.utils.session_tracker import active_session_tracker
-        active_session_tracker.record_activity(
-            user_id_or_email=demo_email,
-            username="Admin Demo",
-            role="admin",
-        )
-
-        access_token = create_access_token(data={"sub": "admin_demo", "role": "admin"})
-        return {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "user": {
-                "username": "Admin Demo",
-                "email": demo_email,
-                "role": "admin",
-                "is_admin": True,
-            },
-        }
-
-    # Check MongoDB for existing admin users
+    # Fetch admin user from MongoDB by email
     users_col = db["users"]
     user = users_col.find_one({"email": email_clean})
 
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid admin credentials.",
-        )
-
-    # Check password
-    from app.utils.auth import verify_password
-    if not verify_password(password, user.get("hashed_password", "")):
+    if not user or not verify_password(password, user.get("hashed_password", "")):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid admin credentials.",

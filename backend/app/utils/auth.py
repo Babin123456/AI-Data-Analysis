@@ -71,27 +71,13 @@ async def get_current_user(token: str | None = Depends(oauth2_scheme)) -> dict:
     if username is None:
         raise credentials_exception
 
-    user = None
-    # Special handling for demo admin user
-    if username == "admin_demo" or payload.get("role") == "admin":
-        from app.config import settings  # noqa: PLC0415
-        demo_email = settings.demo_admin_email.strip().lower()
-        user = db["users"].find_one({"$or": [{"username": username}, {"email": demo_email}]})
-        if not user:
-            user = {
-                "username": "Admin Demo",
-                "email": demo_email,
-                "role": "admin",
-                "is_admin": True,
-                "is_verified": True,
-                "is_active": True,
-            }
-
-    if user is None:
-        user = db["users"].find_one({"username": username})
+    # Look up user from MongoDB by username (stored in JWT sub claim).
+    # Demo admin is seeded into DB at startup, so no special casing needed.
+    user = db["users"].find_one({"username": username})
 
     if user is None:
         raise credentials_exception
+
 
     if "_id" in user:
         user["id"] = str(user["_id"])

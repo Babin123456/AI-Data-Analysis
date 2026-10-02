@@ -65,8 +65,52 @@ def init_db():
         # when the filter indicates a potential collision (~0.1% of new users).
         username_bloom_filter.load_from_db()
 
+        # ── Seed demo admin account into DB (only if it doesn't exist yet) ────
+        _seed_demo_admin()
+
     except Exception as e:
         logger.error(f"Failed to initialize MongoDB connection or indexes: {e}")
+
+
+def _seed_demo_admin() -> None:
+    """Create the demo admin account in MongoDB on first startup.
+
+    Uses $setOnInsert with upsert=True so:
+    - Account doesn't exist → created with credentials from env vars.
+    - Account already exists → existing record is left completely untouched
+      (preserves any password the admin changed through the portal).
+    """
+    from datetime import datetime
+    from app.utils.auth import hash_password  # deferred to avoid circular import
+
+    demo_email = settings.demo_admin_email.strip().lower()
+    demo_password = settings.demo_admin_password or "admin123"
+
+    try:
+        result = db["users"].update_one(
+            {"email": demo_email},        # find by email
+            {
+                "$setOnInsert": {          # only written when inserting (never on update)
+                    "username": "admin_demo",
+                    "email": demo_email,
+                    "hashed_password": hash_password(demo_password),
+                    "role": "admin",
+                    "is_admin": True,
+                    "is_active": True,
+                    "is_verified": True,
+                    "created_at": datetime.utcnow(),
+                }
+            },
+            upsert=True,
+        )
+        if result.upserted_id:
+            logger.info("Demo admin account seeded into MongoDB (first-time setup).")
+        else:
+            logger.info("Demo admin account already exists in MongoDB — no changes made.")
+    except Exception as exc:
+        logger.error("Failed to seed demo admin account: %s", exc)
+
+
 
 def track_groq_usage(call_type: str = "chat", tokens_estimated: int = 150) -> None:
     """Record daily Groq API usage in MongoDB groq_usage collection."""
