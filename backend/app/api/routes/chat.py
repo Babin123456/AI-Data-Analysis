@@ -1,5 +1,5 @@
 """AI Chat endpoint: natural language question -> generated SQL ->
-validated + executed query -> plain-English explanation + chart.
+validated + executed query -> plain-English explanation + results.
 """
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app.db.duckdb_manager import duckdb_manager
 from app.models.schemas import ChatRequest, ChatResponse
-from app.services.chart_service import build_chart_spec, select_chart_type
 from app.services.llm_service import LLMServiceError, llm_service
 from app.services.schema_service import extract_all_schemas
 from app.utils.rate_limit import chat_limiter
@@ -94,14 +93,11 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     except Exception:  # noqa: BLE001
         explanation = "Here are the results for your question."
 
-    chart_type = select_chart_type(columns, rows)
-    chart_spec = build_chart_spec(chart_type, columns, rows)
-
     return ChatResponse(
         answer=explanation,
         sql=safe_sql,
         columns=columns,
         rows=rows,
-        chart_type=chart_type,
-        chart_spec=chart_spec,
+        chart_type=None,
+        chart_spec=None,
     )

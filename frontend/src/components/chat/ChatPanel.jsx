@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from "react";
 import { askQuestion } from "../../services/api.js";
 import { useDataset } from "../../context/DatasetContext.jsx";
 import DatasetSelector from "../shared/DatasetSelector.jsx";
-import ResultChart from "../charts/ResultChart.jsx";
 import ResultTable from "../charts/ResultTable.jsx";
 import SqlViewer from "../charts/SqlViewer.jsx";
 import { exportChatAsHtml } from "../../utils/exportChat.js";
@@ -212,7 +211,6 @@ export default function ChatPanel() {
                     <ResultTable columns={m.columns} rows={m.rows} />
                   </div>
                 )}
-                {m.chart_spec && <ResultChart chartType={m.chart_type} chartSpec={m.chart_spec} />}
               </div>
             )}
           </div>
