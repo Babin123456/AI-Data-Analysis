@@ -134,8 +134,8 @@ export default function Auth() {
   // Countdown timer (shared between verify + reset views)
   const { secondsLeft, isActive: timerActive, startCountdown } = useOtpCountdown();
   const [resendLoading, setResendLoading] = useState(false);
-  const OTP_COOLDOWN = 60; // seconds
-  
+  const OTP_COOLDOWN = 15; // seconds
+
   // Form states
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -155,10 +155,6 @@ export default function Auth() {
     setOtp("");
     setShowPassword(false);
     setEmailError("");
-    // Start cooldown when entering OTP views so the button is disabled immediately
-    if (newView === "verify" || newView === "reset") {
-      startCountdown(OTP_COOLDOWN);
-    }
   };
 
   const handleLogin = async (e) => {

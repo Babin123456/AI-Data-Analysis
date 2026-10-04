@@ -26,7 +26,7 @@ from app.utils.firebase_admin_sdk import verify_firebase_token
 # pyrefly: ignore [missing-import]
 from app.utils.mail import send_otp_email
 # pyrefly: ignore [missing-import]
-from app.utils.rate_limit import login_limiter
+from app.utils.rate_limit import login_limiter, otp_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -75,10 +75,14 @@ def generate_otp() -> str:
 # --- Endpoints ---
 
 @router.post("/register")
-async def register(payload: RegisterRequest, background_tasks: BackgroundTasks):
+async def register(payload: RegisterRequest, request: Request, background_tasks: BackgroundTasks):
     users_col = db["users"]
     username_clean = payload.username.strip()
     email_clean = payload.email.strip().lower()
+
+    # Enforce OTP rate limiting (max 3 OTPs per email/IP per 15 minutes)
+    client_ip = request.client.host if request.client else "unknown"
+    otp_limiter.check_rate_limit(ip=client_ip, username=email_clean)
 
     # Check if email is already registered
     existing_user = users_col.find_one({"email": email_clean})
@@ -203,13 +207,19 @@ async def verify_otp(payload: VerifyOTPRequest):
     return {"status": "success", "message": "Email verified successfully. You can now log in."}
 
 
-OTP_RESEND_COOLDOWN_SECONDS = 60  # Users must wait 60 s between resend requests
+OTP_RESEND_COOLDOWN_SECONDS = 15  # Cooldown between consecutive resends to prevent rapid button mashing
 
 @router.post("/resend-otp")
-async def resend_otp(payload: ResendOTPRequest, background_tasks: BackgroundTasks):
+async def resend_otp(payload: ResendOTPRequest, request: Request, background_tasks: BackgroundTasks):
     """Resend OTP for registration verification or password reset."""
+    client_ip = request.client.host if request.client else "unknown"
+    email_clean = payload.email.strip().lower()
+
+    # Enforce OTP rate limiting (max 3 OTPs per email/IP per 15 minutes)
+    otp_limiter.check_rate_limit(ip=client_ip, username=email_clean)
+
     users_col = db["users"]
-    user = users_col.find_one({"email": payload.email.strip().lower()})
+    user = users_col.find_one({"email": email_clean})
 
     if not user:
         raise HTTPException(
@@ -325,7 +335,7 @@ async def login(payload: LoginRequest, request: Request):
     }
 
 @router.post("/forgot-password")
-async def forgot_password(payload: ForgotPasswordRequest, background_tasks: BackgroundTasks):
+async def forgot_password(payload: ForgotPasswordRequest, request: Request, background_tasks: BackgroundTasks):
     users_col = db["users"]
     email_clean = payload.email.strip().lower()
     user = users_col.find_one({"email": email_clean})
@@ -336,6 +346,10 @@ async def forgot_password(payload: ForgotPasswordRequest, background_tasks: Back
             "status": "success",
             "message": "If the email is registered, a password reset code has been sent."
         }
+        
+    # Enforce OTP rate limiting (max 3 OTPs per email/IP per 15 minutes)
+    client_ip = request.client.host if request.client else "unknown"
+    otp_limiter.check_rate_limit(ip=client_ip, username=email_clean)
         
     # Invalidate previous unused resets
     db["password_resets"].update_many(

@@ -39,9 +39,15 @@ class MongoRateLimiter:
         Duration of the sliding window in seconds.
     """
 
-    def __init__(self, max_requests: int = 5, window_seconds: int = 60) -> None:
+    def __init__(
+        self,
+        max_requests: int = 5,
+        window_seconds: int = 60,
+        custom_detail: str | None = None,
+    ) -> None:
         self.max_requests = max_requests
         self.window_seconds = window_seconds
+        self.custom_detail = custom_detail
         self._col = None   # lazy-loaded to avoid import-time circular issues
 
     def _get_col(self):
@@ -65,13 +71,14 @@ class MongoRateLimiter:
     # Public API
     # ──────────────────────────────────────────────────────────────────────────
 
-    def check_rate_limit(self, ip: str, username: str | None = None) -> None:
+    def check_rate_limit(self, ip: str | None = None, username: str | None = None) -> None:
         """Check sliding-window rate limits for both IP and username.
 
         Raises HTTP 429 if the limit is exceeded for either key.
         Records a new attempt if the limit is not exceeded.
         """
-        self._check_and_record(f"ip:{ip}")
+        if ip:
+            self._check_and_record(f"ip:{ip}")
         if username:
             self._check_and_record(f"user:{username.strip().lower()}")
 
@@ -112,15 +119,21 @@ class MongoRateLimiter:
             return
 
         if count > self.max_requests:
+            detail = self.custom_detail or (
+                f"Too many requests. "
+                f"Please wait {self.window_seconds} seconds before trying again."
+            )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=(
-                    f"Too many requests. "
-                    f"Please wait {self.window_seconds} seconds before trying again."
-                ),
+                detail=detail,
             )
 
 
 # ── Singletons — shared across all workers via MongoDB ────────────────────────
 login_limiter = MongoRateLimiter(max_requests=5, window_seconds=60)
 chat_limiter = MongoRateLimiter(max_requests=15, window_seconds=60)
+otp_limiter = MongoRateLimiter(
+    max_requests=3,
+    window_seconds=900,
+    custom_detail="Too many OTP requests. Maximum 3 OTPs per 15 minutes allowed. Please try again later.",
+)
