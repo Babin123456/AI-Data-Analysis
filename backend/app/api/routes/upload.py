@@ -21,6 +21,7 @@ from app.utils.file_utils import (
     sanitize_filename,
     upload_path_for,
 )
+from app.validation.sql_validator import escape_sql_identifier
 
 MAX_FILES = 10
 
@@ -89,8 +90,9 @@ async def upload_dataset(
 
             schema: DatasetSchema = extract_table_schema(conn, dataset_id, table_name)
 
+            safe_table = escape_sql_identifier(table_name)
             preview_rows = conn.execute(
-                f'SELECT * FROM "{table_name}" LIMIT 100'
+                f"SELECT * FROM {safe_table} LIMIT 100"
             ).fetch_df().to_dict(orient="records")
 
             file_infos.append(
@@ -139,17 +141,19 @@ def _extract_table_schema(conn, dataset_id: str, table_name: str) -> DatasetSche
     }
     _DATETIME_TYPES = {"DATE", "TIME", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE"}
 
-    describe_rows = conn.execute(f'DESCRIBE "{table_name}"').fetchall()
-    row_count = conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0]
+    safe_table = escape_sql_identifier(table_name)
+    describe_rows = conn.execute(f"DESCRIBE {safe_table}").fetchall()
+    row_count = conn.execute(f"SELECT COUNT(*) FROM {safe_table}").fetchone()[0]
 
     columns: list[ColumnSchema] = []
     for col_name, col_type, *_rest in describe_rows:
+        safe_col = escape_sql_identifier(col_name)
         base_type = col_type.split("(")[0].upper()
         missing = conn.execute(
-            f'SELECT COUNT(*) FROM "{table_name}" WHERE "{col_name}" IS NULL'
+            f"SELECT COUNT(*) FROM {safe_table} WHERE {safe_col} IS NULL"
         ).fetchone()[0]
         distinct = conn.execute(
-            f'SELECT COUNT(DISTINCT "{col_name}") FROM "{table_name}"'
+            f"SELECT COUNT(DISTINCT {safe_col}) FROM {safe_table}"
         ).fetchone()[0]
 
         is_numeric = base_type in _NUMERIC_TYPES

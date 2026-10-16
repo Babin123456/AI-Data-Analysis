@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from app.db.duckdb_manager import duckdb_manager
 from app.models.schemas import DatasetSchema
 from app.services.schema_service import extract_all_schemas, extract_schema, invalidate_schema_cache
+from app.validation.sql_validator import escape_sql_identifier
 
 router = APIRouter(prefix="/api/dataset", tags=["dataset"])
 
@@ -46,8 +47,9 @@ async def get_preview(dataset_id: str) -> dict[str, list[dict[str, Any]]]:
     table_names = duckdb_manager.get_table_names(dataset_id)
     result: dict[str, list[dict[str, Any]]] = {}
     for table_name in table_names:
+        safe_table = escape_sql_identifier(table_name)
         rows = (
-            conn.execute(f'SELECT * FROM "{table_name}" LIMIT 100')
+            conn.execute(f"SELECT * FROM {safe_table} LIMIT 100")
             .fetch_df()
             .to_dict(orient="records")
         )

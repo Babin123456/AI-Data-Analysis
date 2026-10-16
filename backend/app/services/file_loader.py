@@ -17,6 +17,7 @@ import pandas as pd
 
 from app.db.duckdb_manager import filename_to_table_name
 from app.utils.file_utils import detect_file_type
+from app.validation.sql_validator import escape_sql_identifier
 
 
 class UnsupportedFileError(Exception):
@@ -52,7 +53,8 @@ class FileLoader:
         # Create a backward-compatible alias view named 'uploaded_data'.
         if create_alias and table_name != "uploaded_data":
             try:
-                conn.execute(f'CREATE OR REPLACE VIEW uploaded_data AS SELECT * FROM "{table_name}"')
+                safe_table = escape_sql_identifier(table_name)
+                conn.execute(f"CREATE OR REPLACE VIEW uploaded_data AS SELECT * FROM {safe_table}")
             except Exception:
                 pass  # Ignore if already exists from another file
 
@@ -65,9 +67,10 @@ class FileLoader:
     def _load_csv(
         self, conn: duckdb.DuckDBPyConnection, file_path: Path, table_name: str
     ) -> None:
+        safe_table = escape_sql_identifier(table_name)
         conn.execute(
             f"""
-            CREATE TABLE "{table_name}" AS
+            CREATE TABLE {safe_table} AS
             SELECT * FROM read_csv_auto(?, sample_size=-1)
             """,
             [str(file_path)],
@@ -92,8 +95,9 @@ class FileLoader:
                 cleaned_cols.append(c_str)
         df.columns = cleaned_cols
 
+        safe_table = escape_sql_identifier(table_name)
         conn.register("tmp_df", df)
-        conn.execute(f'CREATE TABLE "{table_name}" AS SELECT * FROM tmp_df')
+        conn.execute(f"CREATE TABLE {safe_table} AS SELECT * FROM tmp_df")
         conn.unregister("tmp_df")
 
     def _load_sqlite(
@@ -107,12 +111,14 @@ class FileLoader:
             tables = [row[0] for row in cursor.fetchall()]
             if not tables:
                 raise UnsupportedFileError("No tables found in SQLite database")
-            df = pd.read_sql_query(f"SELECT * FROM {tables[0]}", sqlite_conn)
+            safe_source_table = escape_sql_identifier(tables[0])
+            df = pd.read_sql_query(f"SELECT * FROM {safe_source_table}", sqlite_conn)
         finally:
             sqlite_conn.close()
 
+        safe_table = escape_sql_identifier(table_name)
         conn.register("tmp_df", df)
-        conn.execute(f'CREATE TABLE "{table_name}" AS SELECT * FROM tmp_df')
+        conn.execute(f"CREATE TABLE {safe_table} AS SELECT * FROM tmp_df")
         conn.unregister("tmp_df")
 
     def _load_sql_dump(
@@ -128,12 +134,14 @@ class FileLoader:
             tables = [row[0] for row in cursor.fetchall()]
             if not tables:
                 raise UnsupportedFileError("SQL dump did not create any tables")
-            df = pd.read_sql_query(f"SELECT * FROM {tables[0]}", sqlite_conn)
+            safe_source_table = escape_sql_identifier(tables[0])
+            df = pd.read_sql_query(f"SELECT * FROM {safe_source_table}", sqlite_conn)
         finally:
             sqlite_conn.close()
 
+        safe_table = escape_sql_identifier(table_name)
         conn.register("tmp_df", df)
-        conn.execute(f'CREATE TABLE "{table_name}" AS SELECT * FROM tmp_df')
+        conn.execute(f"CREATE TABLE {safe_table} AS SELECT * FROM tmp_df")
         conn.unregister("tmp_df")
 
 

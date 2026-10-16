@@ -8,6 +8,7 @@ import duckdb
 from app.db.duckdb_manager import DuckDBManager, duckdb_manager
 # pyrefly: ignore [missing-import]
 from app.models.schemas import ColumnSchema, DatasetSchema
+from app.validation.sql_validator import escape_sql_identifier
 
 _NUMERIC_TYPES = {
     "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
@@ -24,17 +25,19 @@ def extract_table_schema(conn: duckdb.DuckDBPyConnection, dataset_id: str, table
     if cache_key in _schema_cache:
         return _schema_cache[cache_key]
 
-    describe_rows = conn.execute(f'DESCRIBE "{table_name}"').fetchall()
-    row_count = conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0]
+    safe_table = escape_sql_identifier(table_name)
+    describe_rows = conn.execute(f"DESCRIBE {safe_table}").fetchall()
+    row_count = conn.execute(f"SELECT COUNT(*) FROM {safe_table}").fetchone()[0]
 
     columns: list[ColumnSchema] = []
     for col_name, col_type, *_rest in describe_rows:
+        safe_col = escape_sql_identifier(col_name)
         base_type = col_type.split("(")[0].upper()
         missing = conn.execute(
-            f'SELECT COUNT(*) FROM "{table_name}" WHERE "{col_name}" IS NULL'
+            f"SELECT COUNT(*) FROM {safe_table} WHERE {safe_col} IS NULL"
         ).fetchone()[0]
         distinct = conn.execute(
-            f'SELECT COUNT(DISTINCT "{col_name}") FROM "{table_name}"'
+            f"SELECT COUNT(DISTINCT {safe_col}) FROM {safe_table}"
         ).fetchone()[0]
 
         is_numeric = base_type in _NUMERIC_TYPES
@@ -54,7 +57,7 @@ def extract_table_schema(conn: duckdb.DuckDBPyConnection, dataset_id: str, table
             )
         )
 
-    col_list = ", ".join(f'"{c.name}"' for c in columns) if columns else ""
+    col_list = ", ".join(escape_sql_identifier(c.name) for c in columns) if columns else ""
     duplicate_count = 0
     if col_list:
         try:
@@ -62,7 +65,7 @@ def extract_table_schema(conn: duckdb.DuckDBPyConnection, dataset_id: str, table
                 f"""
                 SELECT COUNT(*) - COUNT(*) FILTER (WHERE rn = 1) FROM (
                     SELECT ROW_NUMBER() OVER (PARTITION BY {col_list}) AS rn
-                    FROM "{table_name}"
+                    FROM {safe_table}
                 ) t
                 """
             ).fetchone()[0]

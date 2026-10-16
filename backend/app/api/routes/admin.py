@@ -15,6 +15,7 @@ from app.db.mongodb import db, client
 from app.utils.auth import create_access_token, get_current_user, verify_password
 from app.utils.logger_streamer import memory_log_handler
 from app.utils.rate_limit import login_limiter
+from app.validation.nosql_validator import sanitize_regex_query
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,7 @@ async def get_paginated_users(
     if role == "admin":
         admin_match = [{"role": "admin"}, {"is_admin": True}]
         if search:
-            s = search.strip()
+            s = sanitize_regex_query(search)
             search_match = [{"username": {"$regex": s, "$options": "i"}}, {"email": {"$regex": s, "$options": "i"}}]
             query = {"$and": [{"$or": admin_match}, {"$or": search_match}]}
         else:
@@ -118,13 +119,13 @@ async def get_paginated_users(
     elif role == "user":
         user_match = {"role": {"$ne": "admin"}, "is_admin": {"$ne": True}}
         if search:
-            s = search.strip()
+            s = sanitize_regex_query(search)
             search_match = [{"username": {"$regex": s, "$options": "i"}}, {"email": {"$regex": s, "$options": "i"}}]
             query = {"$and": [user_match, {"$or": search_match}]}
         else:
             query = user_match
     elif search:
-        s = search.strip()
+        s = sanitize_regex_query(search)
         query["$or"] = [
             {"username": {"$regex": s, "$options": "i"}},
             {"email": {"$regex": s, "$options": "i"}},
