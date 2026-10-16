@@ -11,6 +11,7 @@ from app.models.schemas import ChatRequest, ChatResponse
 from app.services.llm_service import LLMServiceError, llm_service
 from app.services.schema_service import extract_all_schemas
 from app.utils.rate_limit import chat_limiter
+from app.validation.prompt_guard import is_prompt_injection
 from app.validation.sql_validator import SQLValidationError, validate_sql
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,23 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     # Apply Rate limiting (max 15 chat queries per minute per IP)
     client_ip = request.client.host if request.client else "unknown"
     chat_limiter.check_rate_limit(ip=client_ip)
+
+    # --- 0. Prompt Injection & Destructive Query Guard (Zero-latency local check) ---
+    is_injection, reason = is_prompt_injection(req.question)
+    if is_injection:
+        return ChatResponse(
+            answer=(
+                "I cannot process requests that attempt to modify, delete, or truncate data, "
+                "or override system instructions. This assistant is strictly read-only for data analysis."
+            ),
+            sql=None,
+            columns=[],
+            rows=[],
+            chart_type=None,
+            chart_spec=None,
+            warning="Security policy: Data modification and prompt injection attempts are blocked.",
+        )
+
     try:
         conn = duckdb_manager.get_connection(req.dataset_id)
     except KeyError as exc:
@@ -91,17 +109,31 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
                 off_topic=(intent_type == "OFF_TOPIC"),
             )
 
-        # If it was actually a DATA_QUERY but failed, bubble up the SQL error
         # If it failed to generate SQL entirely:
         if raw_sql is None:
+            if isinstance(sql_error, SQLValidationError):
+                return ChatResponse(
+                    answer=(
+                        "I couldn't process that question because it violates read-only security policies "
+                        "(e.g., attempts to alter, truncate, or delete data)."
+                    ),
+                    sql=None,
+                    columns=[],
+                    rows=[],
+                    warning=sql_error_msg,
+                )
             logger.error(f"SQL generation failed: {sql_error}", exc_info=True)
             raise HTTPException(status_code=503, detail=sql_error_msg)
 
         # If it failed validation or execution:
-        answer_msg = "I couldn't safely answer that question." if isinstance(sql_error, SQLValidationError) else "The generated query failed to run against your dataset."
+        answer_msg = (
+            "I couldn't safely answer that question. Requests that attempt to modify data or override instructions are prohibited."
+            if isinstance(sql_error, SQLValidationError)
+            else "The generated query failed to run against your dataset."
+        )
         return ChatResponse(
             answer=answer_msg,
-            sql=safe_sql or raw_sql,
+            sql=None,  # NEVER leak unvalidated or rejected raw SQL
             columns=[],
             rows=[],
             warning=sql_error_msg,

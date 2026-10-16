@@ -3,7 +3,13 @@ import { Check, Copy } from "lucide-react";
 
 export default function SqlViewer({ sql }) {
   const [copied, setCopied] = useState(false);
-  if (!sql) return null;
+  if (!sql || typeof sql !== "string") return null;
+
+  // Guard: Only render if it looks like a valid read-only SQL query
+  const trimmed = sql.trim().toUpperCase();
+  if (!trimmed.startsWith("SELECT") && !trimmed.startsWith("WITH")) {
+    return null;
+  }
 
   const copy = async () => {
     await navigator.clipboard.writeText(sql);
