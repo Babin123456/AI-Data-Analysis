@@ -8,7 +8,7 @@ import { exportChatAsHtml } from "../../utils/exportChat.js";
 import { ChatAiSkeleton } from "../shared/CardSkeleton.jsx";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus.js";
 import { toast } from "react-toastify";
-import { AlertTriangle, Download, Trash2, Send, MessageSquare } from "lucide-react";
+import { AlertTriangle, Download, Trash2, Send, MessageSquare, Copy, Check } from "lucide-react";
 
 const EXAMPLE_QUESTIONS = [
   "Which category has the highest total?",
@@ -24,7 +24,30 @@ export default function ChatPanel() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [popup, setPopup] = useState(null); // off-topic popup message
+  const [copiedIndex, setCopiedIndex] = useState(null);
   const bottomRef = useRef(null);
+
+  const handleCopyQuery = async (text, index) => {
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      setCopiedIndex(index);
+      toast.success("Query copied to clipboard!", { autoClose: 1500, toastId: "copied-query" });
+      setTimeout(() => setCopiedIndex(null), 2000);
+    } catch {
+      toast.error("Failed to copy query to clipboard");
+    }
+  };
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -190,8 +213,23 @@ export default function ChatPanel() {
         {chatMessages.map((m, i) => (
           <div key={i} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
             {m.role === "user" ? (
-              <div className="chat-user-bubble bg-[#0071e3] text-white rounded-2xl rounded-tr-xs px-4 py-2 text-sm max-w-[80%] shadow-sm">
-                {m.content}
+              <div className="flex items-center gap-1.5 max-w-[85%] justify-end group">
+                <button
+                  type="button"
+                  onClick={() => handleCopyQuery(m.content, i)}
+                  className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 dark:text-stone-500 dark:hover:text-stone-200 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-all opacity-70 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 cursor-pointer shrink-0"
+                  title={copiedIndex === i ? "Copied!" : "Copy question"}
+                  aria-label="Copy query"
+                >
+                  {copiedIndex === i ? (
+                    <Check size={14} className="text-emerald-500" />
+                  ) : (
+                    <Copy size={14} />
+                  )}
+                </button>
+                <div className="chat-user-bubble bg-[#0071e3] text-white rounded-2xl rounded-tr-xs px-4 py-2 text-sm shadow-sm break-words whitespace-pre-wrap">
+                  {m.content}
+                </div>
               </div>
             ) : (
               <div className="chat-ai-bubble w-full max-w-[95%] space-y-2.5">
