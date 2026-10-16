@@ -29,16 +29,13 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     is_injection, reason = is_prompt_injection(req.question)
     if is_injection:
         return ChatResponse(
-            answer=(
-                "I cannot process requests that attempt to modify, delete, or truncate data, "
-                "or override system instructions. This assistant is strictly read-only for data analysis."
-            ),
+            answer="I can only help you analyze and query your uploaded data.",
             sql=None,
             columns=[],
             rows=[],
             chart_type=None,
             chart_spec=None,
-            warning="Security policy: Data modification and prompt injection attempts are blocked.",
+            warning=None,
         )
 
     try:
@@ -113,21 +110,18 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         if raw_sql is None:
             if isinstance(sql_error, SQLValidationError):
                 return ChatResponse(
-                    answer=(
-                        "I couldn't process that question because it violates read-only security policies "
-                        "(e.g., attempts to alter, truncate, or delete data)."
-                    ),
+                    answer="I can only help you analyze and query your uploaded data.",
                     sql=None,
                     columns=[],
                     rows=[],
-                    warning=sql_error_msg,
+                    warning=None,
                 )
             logger.error(f"SQL generation failed: {sql_error}", exc_info=True)
             raise HTTPException(status_code=503, detail=sql_error_msg)
 
         # If it failed validation or execution:
         answer_msg = (
-            "I couldn't safely answer that question. Requests that attempt to modify data or override instructions are prohibited."
+            "I can only help you analyze and query your uploaded data."
             if isinstance(sql_error, SQLValidationError)
             else "The generated query failed to run against your dataset."
         )
@@ -136,7 +130,7 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
             sql=None,  # NEVER leak unvalidated or rejected raw SQL
             columns=[],
             rows=[],
-            warning=sql_error_msg,
+            warning=None if isinstance(sql_error, SQLValidationError) else sql_error_msg,
         )
 
     # --- 4. Explain Results (Only on successful execution) ---
