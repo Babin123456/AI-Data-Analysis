@@ -29,17 +29,24 @@ export default function AdminAuth() {
   const rawApiUrl = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
   const API_URL = rawApiUrl.endsWith("/api") ? rawApiUrl.slice(0, -4) : rawApiUrl;
 
+  const validateEmail = (val) => /^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/.test(val.trim());
+
   const handleAdminLogin = async (e) => {
     if (e) e.preventDefault();
-    if (!email || !password) {
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !password) {
       toast.error("Please enter admin email and password.");
+      return;
+    }
+    if (!validateEmail(cleanEmail)) {
+      toast.error("Please enter a valid email address.");
       return;
     }
 
     setLoading(true);
     try {
       const response = await axios.post(`${API_URL}/api/admin/login`, {
-        email: email.trim(),
+        email: cleanEmail,
         password: password.trim(),
       });
 

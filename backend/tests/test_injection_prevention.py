@@ -109,6 +109,45 @@ def test_nosql_operator_check():
     assert_raises(NoSQLValidationError, check_nosql_injection, {"$where": "this.password == 'secret'"})
 
 
+from pydantic import ValidationError
+from app.api.routes.auth import (
+    RegisterRequest,
+    VerifyOTPRequest,
+    LoginRequest,
+    ResetPasswordRequest,
+)
+from app.models.schemas import SqlQueryRequest, ChatRequest, ExploreRequest
+
+
+def test_input_validation_models():
+    # Invalid username (too short or special characters)
+    assert_raises(ValidationError, RegisterRequest, username="ab", email="test@example.com", password="password123")
+    assert_raises(ValidationError, RegisterRequest, username="bad<user>", email="test@example.com", password="password123")
+
+    # Invalid email
+    assert_raises(ValidationError, RegisterRequest, username="gooduser", email="notanemail", password="password123")
+    assert_raises(ValidationError, LoginRequest, email="notanemail", password="password123")
+
+    # Invalid password (too short)
+    assert_raises(ValidationError, RegisterRequest, username="gooduser", email="test@example.com", password="123")
+
+    # Invalid OTP (must be 6 digits)
+    assert_raises(ValidationError, VerifyOTPRequest, email="test@example.com", otp="123")
+    assert_raises(ValidationError, VerifyOTPRequest, email="test@example.com", otp="abcdef")
+    assert_raises(ValidationError, ResetPasswordRequest, email="test@example.com", password="password123", otp="12345")
+
+    # Valid auth requests pass
+    reg = RegisterRequest(username="valid_user.1", email="user@example.com", password="securepassword")
+    assert reg.username == "valid_user.1"
+    otp_req = VerifyOTPRequest(email="user@example.com", otp="123456")
+    assert otp_req.otp == "123456"
+
+    # Schema request validation
+    assert_raises(ValidationError, ChatRequest, dataset_id="valid_id", question="")
+    assert_raises(ValidationError, SqlQueryRequest, dataset_id="valid_id", sql="")
+    assert_raises(ValidationError, SqlQueryRequest, dataset_id="bad id with spaces!", sql="SELECT 1")
+
+
 if __name__ == "__main__":
     test_valid_sql_queries()
     test_forbidden_sql_mutations()
@@ -117,4 +156,5 @@ if __name__ == "__main__":
     test_escape_sql_identifier()
     test_nosql_regex_sanitization()
     test_nosql_operator_check()
-    print("ALL INJECTION PREVENTION TESTS PASSED SUCCESSFULLY!")
+    test_input_validation_models()
+    print("ALL INJECTION PREVENTION AND INPUT VALIDATION TESTS PASSED SUCCESSFULLY!")

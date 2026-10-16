@@ -46,8 +46,14 @@ export default function ChatPanel() {
   }, [dataset]);
 
   const send = async (question) => {
-    const q = question ?? input;
-    if (!q.trim() || !dataset) return;
+    const raw = question ?? input;
+    const q = raw.trim();
+    if (!q || !dataset) return;
+
+    if (q.length > 2000) {
+      toast.warning("Question is too long (maximum 2,000 characters).");
+      return;
+    }
 
     const targetDatasetId = dataset.dataset_id;
     const targetTableName = activeFile?.table_name || null;
@@ -240,6 +246,7 @@ export default function ChatPanel() {
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          maxLength={2000}
           placeholder="Ask anything about your data… (e.g. Total revenue by region)"
           className="chat-input w-full rounded-full border border-stone-300/60 dark:border-white/[0.12] bg-[#fcfaf5]/85 dark:bg-[#1c1c1e]/70 backdrop-blur-2xl pl-5 pr-12 py-3 text-sm text-[#262422] dark:text-[#f5f5f7] outline-none focus:ring-2 focus:ring-[#0071e3]/40 focus:border-[#0071e3] transition-all shadow-xs"
         />

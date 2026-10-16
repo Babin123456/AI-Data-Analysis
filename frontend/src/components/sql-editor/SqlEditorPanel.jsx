@@ -46,15 +46,20 @@ export default function SqlEditorPanel() {
       toast.warning("Please upload a valid file", { toastId: "no-dataset-sql" });
       return;
     }
-    if (!sql.trim()) {
+    const cleanSql = sql.trim();
+    if (!cleanSql) {
       toast.warning("Please enter a SQL query.");
+      return;
+    }
+    if (cleanSql.length > 10000) {
+      toast.warning("SQL query is too long (maximum 10,000 characters).");
       return;
     }
     setLoading(true);
     setError(null);
     setResult(null);
     try {
-      const { data } = await runSqlQuery(dataset.dataset_id, sql);
+      const { data } = await runSqlQuery(dataset.dataset_id, cleanSql);
       if (data.error) {
         setError(data.error);
         toast.error("Query failed.");
@@ -267,6 +272,7 @@ export default function SqlEditorPanel() {
               value={sql}
               onChange={(e) => setSql(e.target.value)}
               onKeyDown={handleKeyDown}
+              maxLength={10000}
               placeholder="Write your SQL query here... (Ctrl+Enter to run)"
               spellCheck={false}
               className="w-full min-h-[180px] max-h-[300px] resize-y px-4 py-3 text-sm font-mono bg-gray-950 text-gray-100 outline-none placeholder:text-gray-600 leading-relaxed"

@@ -56,8 +56,8 @@ class UploadResponse(BaseModel):
 
 
 class SqlQueryRequest(BaseModel):
-    dataset_id: str
-    sql: str
+    dataset_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    sql: str = Field(..., min_length=1, max_length=10000)
 
 
 class SqlQueryResponse(BaseModel):
@@ -68,19 +68,19 @@ class SqlQueryResponse(BaseModel):
 
 
 class ExploreRequest(BaseModel):
-    dataset_id: str
-    x_column: str
-    y_column: str | None = None
+    dataset_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    x_column: str = Field(..., min_length=1, max_length=256)
+    y_column: str | None = Field(default=None, max_length=256)
     aggregation: Literal["sum", "avg", "count", "min", "max", "none"] = "none"
     chart_type: ChartType = "bar"
-    table_name: str | None = None  # optional: specify which table in multi-file datasets
+    table_name: str | None = Field(default=None, max_length=128)
 
 
 class ChatRequest(BaseModel):
-    dataset_id: str
-    question: str
-    conversation_id: str | None = None
-    table_name: str | None = None
+    dataset_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    question: str = Field(..., min_length=1, max_length=2000)
+    conversation_id: str | None = Field(default=None, max_length=64)
+    table_name: str | None = Field(default=None, max_length=128)
 
 
 class ChatResponse(BaseModel):

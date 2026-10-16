@@ -22,9 +22,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
+EMAIL_REGEX = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+
+
 class AdminLoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(..., min_length=5, max_length=100, pattern=EMAIL_REGEX)
+    password: str = Field(..., min_length=1, max_length=128)
 
 
 # Helper dependency to verify Admin privileges
@@ -101,8 +104,8 @@ async def admin_login(payload: AdminLoginRequest, request: Request) -> dict[str,
 async def get_paginated_users(
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=10, ge=1, le=100),
-    search: str | None = Query(default=None),
-    role: str | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=100),
+    role: str | None = Query(default=None, pattern=r"^(admin|user)$"),
     admin_user: dict = Depends(get_admin_user),
 ) -> dict[str, Any]:
     users_col = db["users"]
@@ -221,8 +224,8 @@ async def get_active_sessions(
 @router.get("/logs")
 async def get_system_logs(
     limit: int = Query(default=100, ge=1, le=500),
-    level: str | None = Query(default="ALL"),
-    search: str | None = Query(default=None),
+    level: str | None = Query(default="ALL", pattern=r"^(ALL|DEBUG|INFO|WARNING|ERROR|CRITICAL)$"),
+    search: str | None = Query(default=None, max_length=100),
     admin_user: dict = Depends(get_admin_user),
 ) -> dict[str, Any]:
     logs = memory_log_handler.get_logs(limit=limit, level=level, search=search)
@@ -236,8 +239,8 @@ async def get_system_logs(
 # ── 5. Groq API Usage Analytics (with Date Range Filter) ────────────────────
 @router.get("/groq-usage")
 async def get_groq_usage(
-    start_date: str | None = Query(default=None, description="Start date YYYY-MM-DD"),
-    end_date: str | None = Query(default=None, description="End date YYYY-MM-DD"),
+    start_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$", description="Start date YYYY-MM-DD"),
+    end_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$", description="End date YYYY-MM-DD"),
     admin_user: dict = Depends(get_admin_user),
 ) -> dict[str, Any]:
     usage_col = db["groq_usage"]
@@ -295,9 +298,9 @@ async def get_groq_usage(
     }
 # ── 6. Create or Upgrade Administrator Account ─────────────────────────────
 class CreateAdminRequest(BaseModel):
-    username: str = Field(default="", description="Admin username")
-    email: str = Field(..., description="Admin email address")
-    password: str = Field(default="Admin@12345", description="Default password")
+    username: str = Field(default="", max_length=30, pattern=r"^[a-zA-Z0-9_.-]*$", description="Admin username")
+    email: str = Field(..., min_length=5, max_length=100, pattern=EMAIL_REGEX, description="Admin email address")
+    password: str = Field(default="Admin@12345", min_length=6, max_length=128, description="Default password")
 
 
 @router.post("/create-admin")

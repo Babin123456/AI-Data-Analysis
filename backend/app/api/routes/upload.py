@@ -52,6 +52,12 @@ async def upload_dataset(
         if not file.filename:
             raise HTTPException(status_code=400, detail=f"File #{idx + 1} has no filename.")
 
+        if len(file.filename) > 255:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Filename '{file.filename[:30]}...' is too long (maximum 255 characters allowed).",
+            )
+
         if not is_allowed_extension(file.filename):
             raise HTTPException(
                 status_code=400,
@@ -62,6 +68,11 @@ async def upload_dataset(
             )
 
         contents = await file.read()
+        if len(contents) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File '{file.filename}' is empty (0 bytes). Please upload a valid dataset.",
+            )
         size_mb = len(contents) / (1024 * 1024)
         if size_mb > settings.max_upload_mb:
             raise HTTPException(

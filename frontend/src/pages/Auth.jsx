@@ -145,8 +145,11 @@ export default function Auth() {
   const [showPassword, setShowPassword] = useState(false);
   const [emailError, setEmailError] = useState("");
 
-  // Email format validator
-  const validateEmail = (val) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim());
+  // Field validators
+  const validateEmail = (val) => /^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/.test(val.trim());
+  const validateUsername = (val) => /^[a-zA-Z0-9_.-]{3,30}$/.test(val.trim());
+  const validateOtp = (val) => /^\d{6}$/.test(val.trim().replace(/\s|-/g, ""));
+  const validatePassword = (val) => val && val.length >= 6 && val.length <= 128;
 
   const switchView = (newView) => {
     setView(newView);
@@ -159,15 +162,25 @@ export default function Auth() {
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    if (!email || !password) return;
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !password) {
+      toast.error("Please enter both email and password.");
+      return;
+    }
+    if (!validateEmail(cleanEmail)) {
+      setEmailError("Please enter a valid email address.");
+      toast.error("Please enter a valid email address.");
+      return;
+    }
+    setEmailError("");
     setLoading(true);
-    const result = await login(email, password);
+    const result = await login(cleanEmail, password);
     setLoading(false);
     if (result.success) {
       toast.success("Successfully logged in!");
     } else {
       if (result.isUnverified) {
-        setEmail(result.email || email);
+        setEmail(result.email || cleanEmail);
         switchView("verify");
         const statusMsg = "Please verify your account using the OTP code sent to your email.";
         toast.warning(statusMsg);
@@ -180,14 +193,28 @@ export default function Auth() {
   const handleRegister = async (e) => {
     e.preventDefault();
     if (loading) return;
-    if (!username || !email || !password) return;
-    if (!validateEmail(email)) {
-      setEmailError("Enter a valid Email");
+    const cleanUsername = username.trim();
+    const cleanEmail = email.trim();
+    if (!cleanUsername || !cleanEmail || !password) {
+      toast.error("All fields are required.");
+      return;
+    }
+    if (!validateUsername(cleanUsername)) {
+      toast.error("Username must be 3-30 characters and contain only letters, numbers, underscores, dots, or dashes.");
+      return;
+    }
+    if (!validateEmail(cleanEmail)) {
+      setEmailError("Please enter a valid email address.");
+      toast.error("Please enter a valid email address.");
       return;
     }
     setEmailError("");
+    if (!validatePassword(password)) {
+      toast.error("Password must be between 6 and 128 characters.");
+      return;
+    }
     setLoading(true);
-    const result = await register(username, email, password);
+    const result = await register(cleanUsername, cleanEmail, password);
     setLoading(false);
     if (result.success) {
       setEmail(result.email);
@@ -202,9 +229,22 @@ export default function Auth() {
   const handleVerifyOtp = async (e) => {
     e.preventDefault();
     if (loading) return;
-    if (!email || !otp) return;
+    const cleanEmail = email.trim();
+    const cleanOtp = otp.trim().replace(/\s|-/g, "");
+    if (!cleanEmail || !cleanOtp) {
+      toast.error("Please enter both email and OTP.");
+      return;
+    }
+    if (!validateEmail(cleanEmail)) {
+      toast.error("Please enter a valid email address.");
+      return;
+    }
+    if (!validateOtp(cleanOtp)) {
+      toast.error("Please enter a valid 6-digit verification code.");
+      return;
+    }
     setLoading(true);
-    const result = await verifyOtp(email, otp);
+    const result = await verifyOtp(cleanEmail, cleanOtp);
     setLoading(false);
     if (result.success) {
       switchView("login");
@@ -218,14 +258,19 @@ export default function Auth() {
   const handleForgotPassword = async (e) => {
     e.preventDefault();
     if (loading) return;
-    if (!email) return;
-    if (!validateEmail(email)) {
-      setEmailError("Enter a valid Email");
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      toast.error("Please enter your email address.");
+      return;
+    }
+    if (!validateEmail(cleanEmail)) {
+      setEmailError("Please enter a valid email address.");
+      toast.error("Please enter a valid email address.");
       return;
     }
     setEmailError("");
     setLoading(true);
-    const result = await forgotPassword(email);
+    const result = await forgotPassword(cleanEmail);
     setLoading(false);
     if (result.success) {
       switchView("reset");
@@ -239,9 +284,26 @@ export default function Auth() {
   const handleResetPassword = async (e) => {
     e.preventDefault();
     if (loading) return;
-    if (!email || !password || !otp) return;
+    const cleanEmail = email.trim();
+    const cleanOtp = otp.trim().replace(/\s|-/g, "");
+    if (!cleanEmail || !password || !cleanOtp) {
+      toast.error("All fields are required.");
+      return;
+    }
+    if (!validateEmail(cleanEmail)) {
+      toast.error("Please enter a valid email address.");
+      return;
+    }
+    if (!validateOtp(cleanOtp)) {
+      toast.error("Please enter a valid 6-digit OTP code.");
+      return;
+    }
+    if (!validatePassword(password)) {
+      toast.error("Password must be between 6 and 128 characters.");
+      return;
+    }
     setLoading(true);
-    const result = await resetPassword(email, password, otp);
+    const result = await resetPassword(cleanEmail, password, cleanOtp);
     setLoading(false);
     if (result.success) {
       switchView("login");

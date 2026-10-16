@@ -6,6 +6,7 @@ import secrets
 from datetime import datetime, timedelta
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from typing import Literal
 from pydantic import BaseModel, Field
 
 # pyrefly: ignore [missing-import]
@@ -32,39 +33,43 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+EMAIL_REGEX = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+USERNAME_REGEX = r"^[a-zA-Z0-9_.-]+$"
+OTP_REGEX = r"^\d{6}$"
+
 # --- Request/Response Models ---
 
 class RegisterRequest(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50)
-    email: str = Field(..., min_length=3, max_length=100)
-    password: str = Field(..., min_length=6)
+    username: str = Field(..., min_length=3, max_length=30, pattern=USERNAME_REGEX)
+    email: str = Field(..., min_length=5, max_length=100, pattern=EMAIL_REGEX)
+    password: str = Field(..., min_length=6, max_length=128)
 
 class VerifyOTPRequest(BaseModel):
-    email: str
-    otp: str
+    email: str = Field(..., min_length=5, max_length=100, pattern=EMAIL_REGEX)
+    otp: str = Field(..., min_length=6, max_length=6, pattern=OTP_REGEX)
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(..., min_length=5, max_length=100, pattern=EMAIL_REGEX)
+    password: str = Field(..., min_length=1, max_length=128)
 
 class ForgotPasswordRequest(BaseModel):
-    email: str
+    email: str = Field(..., min_length=5, max_length=100, pattern=EMAIL_REGEX)
 
 class ResetPasswordRequest(BaseModel):
-    email: str
-    password: str  # The new password
-    otp: str
+    email: str = Field(..., min_length=5, max_length=100, pattern=EMAIL_REGEX)
+    password: str = Field(..., min_length=6, max_length=128)
+    otp: str = Field(..., min_length=6, max_length=6, pattern=OTP_REGEX)
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str = Field(..., min_length=6)
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=6, max_length=128)
 
 class ResendOTPRequest(BaseModel):
-    email: str
-    purpose: str = Field(default="registration")  # "registration" or "reset"
+    email: str = Field(..., min_length=5, max_length=100, pattern=EMAIL_REGEX)
+    purpose: Literal["registration", "reset"] = Field(default="registration")
 
 class GoogleAuthRequest(BaseModel):
-    id_token: str  # Firebase ID token from the frontend
+    id_token: str = Field(..., min_length=10, max_length=5000)
 
 # --- Helper Functions ---
 

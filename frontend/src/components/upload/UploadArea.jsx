@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 
 const ACCEPTED = ".csv,.xlsx,.xls,.db,.sqlite,.sql";
+const ALLOWED_EXTS = new Set(["csv", "xlsx", "xls", "db", "sqlite", "sql"]);
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB
 const MAX_FILES = 10;
 
 const FILE_ICONS = {
@@ -56,9 +58,30 @@ export default function UploadArea() {
     ), [setEntries]);
 
   const addFiles = useCallback((newFiles) => {
-    const fileArray = Array.from(newFiles);
+    const rawFiles = Array.from(newFiles);
+    const validFiles = [];
+
+    for (const file of rawFiles) {
+      const ext = file.name.split(".").pop()?.toLowerCase();
+      if (!ext || !ALLOWED_EXTS.has(ext)) {
+        toast.error(`"${file.name}" has an unsupported format. Allowed: ${ACCEPTED}`);
+        continue;
+      }
+      if (file.size === 0) {
+        toast.error(`"${file.name}" is empty (0 bytes).`);
+        continue;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        toast.error(`"${file.name}" exceeds the 50MB maximum upload limit.`);
+        continue;
+      }
+      validFiles.push(file);
+    }
+
+    if (validFiles.length === 0) return;
+
     setEntries((prev) => {
-      const combined = [...prev, ...fileArray.map(buildEntry)];
+      const combined = [...prev, ...validFiles.map(buildEntry)];
       if (combined.length > MAX_FILES) {
         toast.warning(`Maximum ${MAX_FILES} files allowed. Only the first ${MAX_FILES} were kept.`);
         return combined.slice(0, MAX_FILES);

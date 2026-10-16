@@ -11,7 +11,7 @@ import io
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.db.duckdb_manager import duckdb_manager
 from app.validation.sql_validator import SQLValidationError, validate_sql
@@ -20,8 +20,8 @@ router = APIRouter(prefix="/api/download", tags=["download"])
 
 
 class DownloadRequest(BaseModel):
-    dataset_id: str
-    sql: str
+    dataset_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    sql: str = Field(..., min_length=1, max_length=10000)
 
 
 @router.post("/csv")
