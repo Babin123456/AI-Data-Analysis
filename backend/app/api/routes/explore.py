@@ -6,7 +6,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
 from app.db.duckdb_manager import duckdb_manager
 from app.models.schemas import ExploreRequest
@@ -38,20 +39,49 @@ def _is_numeric_type(col_type: str) -> bool:
     return base in _NUMERIC_TYPES
 
 
+def _make_error_response(
+    status_code: int,
+    detail: str,
+    error_code: str,
+    column: str | None = None,
+    column_type: str | None = None,
+    requested_aggregation: str | None = None,
+    suggested_action: str | None = None,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "detail": detail,
+            "message": detail,
+            "error_code": error_code,
+            "column": column,
+            "column_type": column_type,
+            "requested_aggregation": requested_aggregation,
+            "suggested_action": suggested_action,
+        },
+    )
+
+
 @router.post("")
-async def explore(req: ExploreRequest) -> dict[str, Any]:
+async def explore(req: ExploreRequest) -> Any:
+    # 1. Validate dataset existence and connection
     try:
         conn = duckdb_manager.get_connection(req.dataset_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Dataset not found or session expired. Please re-upload your file.") from exc
+    except KeyError:
+        return _make_error_response(
+            status_code=404,
+            detail="Dataset not found or session expired. Please re-upload your file.",
+            error_code="DATASET_NOT_FOUND",
+        )
 
-    # 1. Validate target table
+    # 2. Validate target table
     if req.table_name:
         available_tables = duckdb_manager.get_table_names(req.dataset_id)
         if req.table_name not in available_tables:
-            raise HTTPException(
+            return _make_error_response(
                 status_code=400,
                 detail=f"Unknown table '{req.table_name}'. Available tables: {available_tables}",
+                error_code="UNKNOWN_TABLE",
             )
         target_table = req.table_name
     else:
@@ -59,81 +89,115 @@ async def explore(req: ExploreRequest) -> dict[str, Any]:
 
     safe_table = escape_sql_identifier(target_table)
 
-    # 2. Introspect table columns and data types
+    # 3. Introspect table columns and data types
     try:
         describe_rows = conn.execute(f"DESCRIBE {safe_table}").fetchall()
     except Exception as exc:
         logger.exception("Failed to describe table %s: %s", target_table, exc)
-        raise HTTPException(status_code=400, detail=f"Failed to inspect table '{target_table}'.") from exc
+        return _make_error_response(
+            status_code=400,
+            detail=f"Failed to inspect table '{target_table}'.",
+            error_code="TABLE_INSPECTION_FAILED",
+        )
 
     column_types: dict[str, str] = {row[0]: row[1] for row in describe_rows}
 
-    # 3. Validate column existence
+    # 4. Validate column existence
     if req.x_column not in column_types:
-        raise HTTPException(
+        return _make_error_response(
             status_code=400,
             detail=f"Column '{req.x_column}' does not exist in table '{target_table}'. Available columns: {list(column_types.keys())}",
+            error_code="COLUMN_NOT_FOUND",
+            column=req.x_column,
         )
     if req.y_column and req.y_column not in column_types:
-        raise HTTPException(
+        return _make_error_response(
             status_code=400,
             detail=f"Column '{req.y_column}' does not exist in table '{target_table}'. Available columns: {list(column_types.keys())}",
+            error_code="COLUMN_NOT_FOUND",
+            column=req.y_column,
         )
 
     x_type = column_types[req.x_column]
     y_type = column_types[req.y_column] if req.y_column else None
 
-    # 4. Enforce chart compatibility and type safety
+    # 5. Enforce chart compatibility and type safety
     if req.chart_type == "histogram":
         if not _is_numeric_type(x_type):
-            raise HTTPException(
+            return _make_error_response(
                 status_code=400,
                 detail=f"Histogram requires a numeric X-axis column, but '{req.x_column}' is '{x_type}'. Please choose a numeric column.",
+                error_code="INCOMPATIBLE_X_AXIS",
+                column=req.x_column,
+                column_type=x_type,
+                suggested_action="select_numeric_x",
             )
 
     elif req.chart_type == "scatter":
         if not req.y_column:
-            raise HTTPException(
+            return _make_error_response(
                 status_code=400,
                 detail="Scatter plots require both X-axis and Y-axis columns to be selected.",
+                error_code="MISSING_Y_AXIS",
+                suggested_action="select_numeric_y",
             )
         if not _is_numeric_type(x_type):
-            raise HTTPException(
+            return _make_error_response(
                 status_code=400,
                 detail=f"Scatter plot requires a numeric X-axis column, but '{req.x_column}' is '{x_type}'.",
+                error_code="INCOMPATIBLE_X_AXIS",
+                column=req.x_column,
+                column_type=x_type,
+                suggested_action="select_numeric_x",
             )
         if y_type and not _is_numeric_type(y_type):
-            raise HTTPException(
+            return _make_error_response(
                 status_code=400,
                 detail=f"Scatter plot requires a numeric Y-axis column, but '{req.y_column}' is '{y_type}'.",
+                error_code="INCOMPATIBLE_Y_AXIS",
+                column=req.y_column,
+                column_type=y_type,
+                suggested_action="select_numeric_y",
             )
 
     elif req.chart_type == "box":
         metric_col = req.y_column or req.x_column
         metric_type = y_type or x_type
         if not _is_numeric_type(metric_type):
-            raise HTTPException(
+            return _make_error_response(
                 status_code=400,
                 detail=f"Box plot requires a numeric metric column for distribution, but '{metric_col}' is '{metric_type}'.",
+                error_code="INCOMPATIBLE_Y_AXIS",
+                column=metric_col,
+                column_type=metric_type,
+                suggested_action="select_numeric_metric",
             )
 
-    # 5. Enforce aggregation compatibility
+    # 6. Enforce aggregation compatibility
     if req.aggregation in ("sum", "avg", "min", "max"):
         if not req.y_column:
-            raise HTTPException(
+            return _make_error_response(
                 status_code=400,
                 detail=f"Aggregation '{req.aggregation.upper()}' requires a Y-axis column. Please select a numeric Y-axis column or choose COUNT.",
+                error_code="MISSING_Y_AXIS",
+                requested_aggregation=req.aggregation,
+                suggested_action="switch_to_count",
             )
         if y_type and not _is_numeric_type(y_type):
-            raise HTTPException(
+            return _make_error_response(
                 status_code=400,
                 detail=f"Cannot calculate {req.aggregation.upper()} on non-numeric column '{req.y_column}' ({y_type}). Please select a numeric column for Y-axis or choose COUNT aggregation.",
+                error_code="INCOMPATIBLE_AGGREGATION",
+                column=req.y_column,
+                column_type=y_type,
+                requested_aggregation=req.aggregation,
+                suggested_action="switch_to_count",
             )
 
     safe_x = escape_sql_identifier(req.x_column)
     safe_y = escape_sql_identifier(req.y_column) if req.y_column else None
 
-    # 6. Build deterministic, secure query
+    # 7. Build deterministic, secure query
     if req.chart_type == "histogram":
         sql = f"SELECT {safe_x} FROM {safe_table} WHERE {safe_x} IS NOT NULL LIMIT 1000"
     elif req.chart_type == "scatter":
@@ -166,9 +230,16 @@ async def explore(req: ExploreRequest) -> dict[str, Any]:
         df = conn.execute(sql).fetch_df()
     except Exception as exc:  # noqa: BLE001
         logger.exception("DuckDB query execution failed for sql: %s: %s", sql, exc)
-        raise HTTPException(status_code=400, detail=f"Query failed: {exc}") from exc
+        return _make_error_response(
+            status_code=400,
+            detail=f"Query failed: {exc}",
+            error_code="QUERY_EXECUTION_ERROR",
+        )
 
+    # Sanitize NaN / NaT values to None for clean JSON serialization
+    df = df.where(df.notnull(), None)
     rows = df.to_dict(orient="records")
+
     y_col_spec = req.y_column if req.y_column else ("count" if "count" in df.columns else None)
     chart_spec = build_chart_spec(
         req.chart_type,

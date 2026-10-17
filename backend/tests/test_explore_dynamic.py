@@ -280,3 +280,142 @@ def test_explore_sql_injection_prevention(test_dataset):
     conn = duckdb_manager.get_connection(test_dataset)
     count = conn.execute("SELECT COUNT(*) FROM staff_metrics").fetchone()[0]
     assert count == 5
+
+
+def test_explore_max_on_non_numeric_type_column_returns_structured_error():
+    """Verify that requesting MAX on a non-numeric 'type' VARCHAR column returns
+    structured error details and suggested action to switch to COUNT."""
+    csv_content = (
+        b"item_id,type,price,quantity\n"
+        b"1,electronics,299.99,10\n"
+        b"2,apparel,49.50,25\n"
+        b"3,electronics,199.00,5\n"
+        b"4,books,15.20,50\n"
+    )
+    resp = client.post(
+        "/api/upload",
+        files=[("files", ("products.csv", csv_content, "text/csv"))],
+    )
+    assert resp.status_code == 200
+    dataset_id = resp.json()["dataset_id"]
+
+    # Incompatible: MAX on 'type' VARCHAR
+    err_resp = client.post(
+        "/api/explore",
+        json={
+            "dataset_id": dataset_id,
+            "x_column": "item_id",
+            "y_column": "type",
+            "aggregation": "max",
+            "chart_type": "bar",
+        },
+    )
+    assert err_resp.status_code == 400
+    err_data = err_resp.json()
+    assert err_data["error_code"] == "INCOMPATIBLE_AGGREGATION"
+    assert err_data["column"] == "type"
+    assert "VARCHAR" in err_data["column_type"]
+    assert err_data["suggested_action"] == "switch_to_count"
+    assert "Cannot calculate MAX on non-numeric column 'type'" in err_data["detail"]
+
+    # User correction: switch to COUNT
+    corr_resp = client.post(
+        "/api/explore",
+        json={
+            "dataset_id": dataset_id,
+            "x_column": "type",
+            "y_column": "type",
+            "aggregation": "count",
+            "chart_type": "bar",
+        },
+    )
+    assert corr_resp.status_code == 200
+    corr_data = corr_resp.json()
+    assert len(corr_data["rows"]) == 3
+    duckdb_manager.drop_connection(dataset_id)
+
+
+def test_explore_null_only_column():
+    """Verify that querying a column containing only NULL values handles safely."""
+    csv_content = (
+        b"category,null_metric,valid_num\n"
+        b"A,,10.5\n"
+        b"B,,20.5\n"
+        b"A,,30.0\n"
+    )
+    resp = client.post(
+        "/api/upload",
+        files=[("files", ("null_test.csv", csv_content, "text/csv"))],
+    )
+    assert resp.status_code == 200
+    dataset_id = resp.json()["dataset_id"]
+
+    # Count with null column
+    resp_count = client.post(
+        "/api/explore",
+        json={
+            "dataset_id": dataset_id,
+            "x_column": "category",
+            "y_column": "null_metric",
+            "aggregation": "count",
+            "chart_type": "bar",
+        },
+    )
+    assert resp_count.status_code == 200
+    duckdb_manager.drop_connection(dataset_id)
+
+
+def test_explore_empty_dataset():
+    """Verify that an empty dataset (0 rows) does not crash and returns empty rows."""
+    csv_content = b"category,score\n"
+    resp = client.post(
+        "/api/upload",
+        files=[("files", ("empty_test.csv", csv_content, "text/csv"))],
+    )
+    assert resp.status_code == 200
+    dataset_id = resp.json()["dataset_id"]
+
+    resp_explore = client.post(
+        "/api/explore",
+        json={
+            "dataset_id": dataset_id,
+            "x_column": "category",
+            "chart_type": "bar",
+        },
+    )
+    assert resp_explore.status_code == 200
+    data = resp_explore.json()
+    assert data["rows"] == []
+    duckdb_manager.drop_connection(dataset_id)
+
+
+def test_explore_boolean_and_double_columns():
+    """Verify boolean grouping and double precision calculations."""
+    csv_content = (
+        b"is_active,price_double\n"
+        b"true,19.99\n"
+        b"false,49.95\n"
+        b"true,99.99\n"
+    )
+    resp = client.post(
+        "/api/upload",
+        files=[("files", ("bool_double.csv", csv_content, "text/csv"))],
+    )
+    assert resp.status_code == 200
+    dataset_id = resp.json()["dataset_id"]
+
+    resp_explore = client.post(
+        "/api/explore",
+        json={
+            "dataset_id": dataset_id,
+            "x_column": "is_active",
+            "y_column": "price_double",
+            "aggregation": "avg",
+            "chart_type": "bar",
+        },
+    )
+    assert resp_explore.status_code == 200
+    data = resp_explore.json()
+    assert len(data["rows"]) == 2
+    duckdb_manager.drop_connection(dataset_id)
+

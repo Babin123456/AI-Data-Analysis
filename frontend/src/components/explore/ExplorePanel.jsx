@@ -19,6 +19,7 @@ import {
   Calendar,
   CheckCircle2,
   Info,
+  Wand2,
 } from "lucide-react";
 
 const CHART_TYPES = [
@@ -31,13 +32,13 @@ const CHART_TYPES = [
   { id: "area", label: "Area Chart", desc: "Volume progression across continuous axis" },
 ];
 
-const AGGREGATIONS = [
-  { id: "none", label: "None (Raw Data)" },
-  { id: "sum", label: "Sum (SUM)" },
-  { id: "avg", label: "Average (AVG)" },
-  { id: "count", label: "Count (COUNT)" },
-  { id: "min", label: "Minimum (MIN)" },
-  { id: "max", label: "Maximum (MAX)" },
+const ALL_AGGREGATIONS = [
+  { id: "none", label: "None (Raw Data)", numericOnly: false },
+  { id: "sum", label: "Sum (SUM)", numericOnly: true },
+  { id: "avg", label: "Average (AVG)", numericOnly: true },
+  { id: "count", label: "Count (COUNT)", numericOnly: false },
+  { id: "min", label: "Minimum (MIN)", numericOnly: true },
+  { id: "max", label: "Maximum (MAX)", numericOnly: true },
 ];
 
 export default function ExplorePanel() {
@@ -90,6 +91,19 @@ export default function ExplorePanel() {
     };
   }, [schema]);
 
+  // Selected column objects for type inspection
+  const selectedXColObj = useMemo(
+    () => allColumns.find((c) => c.name === xColumn) || null,
+    [xColumn, allColumns]
+  );
+  const selectedYColObj = useMemo(
+    () => allColumns.find((c) => c.name === yColumn) || null,
+    [yColumn, allColumns]
+  );
+
+  const isXNumeric = selectedXColObj?.is_numeric === true;
+  const isYNumeric = selectedYColObj?.is_numeric === true;
+
   // Determine column compatibility constraints based on current chartType
   const chartRules = useMemo(() => {
     switch (chartType) {
@@ -132,7 +146,7 @@ export default function ExplorePanel() {
       case "pie":
         return {
           allowedX: allColumns,
-          allowedY: numericColumns,
+          allowedY: allColumns,
           yRequired: false,
           yDisabled: false,
           aggAllowed: true,
@@ -158,7 +172,7 @@ export default function ExplorePanel() {
       default:
         return {
           allowedX: allColumns,
-          allowedY: numericColumns,
+          allowedY: allColumns,
           yRequired: false,
           yDisabled: false,
           aggAllowed: true,
@@ -168,11 +182,49 @@ export default function ExplorePanel() {
           hint: "Bar charts compare numeric totals or frequency counts across categories.",
         };
     }
-  }, [chartType, numericColumns, categoricalColumns, datetimeColumns, allColumns]);
+  }, [chartType, numericColumns, allColumns]);
+
+  // Dynamically compute valid aggregations based on current Y column and chart type
+  const availableAggregations = useMemo(() => {
+    if (!chartRules.aggAllowed) {
+      return [{ id: chartRules.fixedAgg || "none", label: "None (Raw Data)", disabled: false }];
+    }
+
+    if (!yColumn) {
+      return [{ id: "count", label: "Count (Frequency of Categories)", disabled: false }];
+    }
+
+    // If Y is non-numeric (e.g. VARCHAR like 'type' or BOOLEAN):
+    // SUM, AVG, MIN, MAX are incompatible; only COUNT and NONE are valid
+    if (!isYNumeric) {
+      return [
+        { id: "count", label: `Count (${yColumn} non-null)`, disabled: false },
+        { id: "none", label: "None (Raw rows)", disabled: false },
+        { id: "sum", label: "Sum (SUM) — Numeric Only", disabled: true },
+        { id: "avg", label: "Average (AVG) — Numeric Only", disabled: true },
+        { id: "min", label: "Minimum (MIN) — Numeric Only", disabled: true },
+        { id: "max", label: "Maximum (MAX) — Numeric Only", disabled: true },
+      ];
+    }
+
+    // Y is numeric: all aggregations are available
+    return ALL_AGGREGATIONS.map((a) => ({ ...a, disabled: false }));
+  }, [chartRules, yColumn, isYNumeric]);
+
+  // Check if current configuration has an aggregation incompatibility
+  const aggregationIncompatibility = useMemo(() => {
+    if (!chartRules.aggAllowed) return null;
+    if (yColumn && !isYNumeric && ["sum", "avg", "min", "max"].includes(aggregation)) {
+      return {
+        message: `Cannot calculate ${aggregation.toUpperCase()} on text column '${yColumn}' (${selectedYColObj?.dtype || "VARCHAR"}).`,
+        suggestedAgg: "count",
+      };
+    }
+    return null;
+  }, [chartRules, yColumn, isYNumeric, aggregation, selectedYColObj]);
 
   // Reset or repair column selections when dataset, active table, or chartType changes
   useEffect(() => {
-    // Invalidate any pending in-flight queries
     activeReqIdRef.current++;
     setResult(null);
     setError(null);
@@ -203,7 +255,6 @@ export default function ExplorePanel() {
     } else {
       const validYNames = chartRules.allowedY.map((c) => c.name);
       if (chartRules.yRequired && !validYNames.includes(yColumn)) {
-        // Find a numeric column that is preferably different from X (for scatter)
         const candidate =
           validYNames.find((name) => name !== nextX) || validYNames[0] || "";
         setYColumn(candidate);
@@ -215,8 +266,11 @@ export default function ExplorePanel() {
     // 3. Set aggregation
     if (!chartRules.aggAllowed) {
       setAggregation(chartRules.fixedAgg || "none");
-    } else if (aggregation === "none" && chartType === "bar") {
-      setAggregation("sum");
+    } else if (!yColumn && aggregation !== "count") {
+      setAggregation("count");
+    } else if (yColumn && !isYNumeric && ["sum", "avg", "min", "max"].includes(aggregation)) {
+      // Do not silently change, but if aggregation was default, set to count
+      // Handled gracefully with inline prompt
     }
   }, [dataset, selectedFileIndex, chartType, schema]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -238,22 +292,28 @@ export default function ExplorePanel() {
     );
   }
 
-  // Check if compatible columns exist for current chartType
+  // Check compatibility
   const hasCompatibleX = chartRules.allowedX.length > 0;
   const hasCompatibleY = !chartRules.yRequired || chartRules.allowedY.length > 0;
   const isConfigurationValid =
     xColumn &&
     (!chartRules.yRequired || yColumn) &&
     hasCompatibleX &&
-    hasCompatibleY;
+    hasCompatibleY &&
+    !aggregationIncompatibility;
 
-  const runQuery = async () => {
-    if (!xColumn) {
+  const runQuery = async (overrides = {}) => {
+    const targetX = overrides.xColumn !== undefined ? overrides.xColumn : xColumn;
+    const targetY = overrides.yColumn !== undefined ? overrides.yColumn : yColumn;
+    const targetAgg = overrides.aggregation !== undefined ? overrides.aggregation : aggregation;
+    const targetChartType = overrides.chartType !== undefined ? overrides.chartType : chartType;
+
+    if (!targetX) {
       toast.warning("Please select an X-axis column.");
       return;
     }
-    if (chartRules.yRequired && !yColumn) {
-      toast.warning(`Please select a Y-axis column for ${chartType.toUpperCase()} chart.`);
+    if (chartRules.yRequired && !targetY) {
+      toast.warning(`Please select a Y-axis column for ${targetChartType.toUpperCase()} chart.`);
       return;
     }
 
@@ -266,15 +326,14 @@ export default function ExplorePanel() {
       const payload = {
         dataset_id: dataset.dataset_id,
         table_name: activeFile?.table_name,
-        x_column: xColumn,
-        y_column: chartRules.yDisabled ? null : (yColumn || null),
-        aggregation: chartRules.aggAllowed ? aggregation : (chartRules.fixedAgg || "none"),
-        chart_type: chartType,
+        x_column: targetX,
+        y_column: chartRules.yDisabled ? null : (targetY || null),
+        aggregation: chartRules.aggAllowed ? targetAgg : (chartRules.fixedAgg || "none"),
+        chart_type: targetChartType,
       };
 
       const { data } = await explore(payload);
 
-      // Guard against stale response if user switched dataset or triggered another query
       if (activeReqIdRef.current !== currentReqId) return;
 
       setResult(data);
@@ -282,20 +341,28 @@ export default function ExplorePanel() {
     } catch (err) {
       if (activeReqIdRef.current !== currentReqId) return;
 
-      const status = err?.response?.status;
+      const errData = err?.response?.data;
       let userMsg = "Query execution failed. Please check your column selections.";
+      let errorCode = errData?.error_code || null;
+      let suggestedAction = errData?.suggested_action || null;
+      let errorCol = errData?.column || targetY;
 
-      if (status === 404) {
+      if (err?.response?.status === 404) {
         userMsg = "Dataset session expired. Please re-upload your file.";
-      } else if (err?.response?.data?.detail) {
-        userMsg = err.response.data.detail;
+        errorCode = "DATASET_NOT_FOUND";
+      } else if (errData?.detail) {
+        userMsg = typeof errData.detail === "string" ? errData.detail : (errData.detail.message || JSON.stringify(errData.detail));
       } else if (err?.message === "Network Error") {
         userMsg = "Network error: Unable to reach the server. Please check your connection.";
+        errorCode = "NETWORK_ERROR";
       }
 
       setError({
         message: userMsg,
-        status,
+        errorCode,
+        suggestedAction,
+        column: errorCol,
+        status: err?.response?.status,
       });
       toast.error(userMsg);
     } finally {
@@ -303,6 +370,19 @@ export default function ExplorePanel() {
         setLoading(false);
       }
     }
+  };
+
+  // One-click quick resolution handlers
+  const handleSwitchToCountAndRun = () => {
+    setAggregation("count");
+    setError(null);
+    runQuery({ aggregation: "count" });
+  };
+
+  const handleSelectNumericAndRun = (numericColName) => {
+    setYColumn(numericColName);
+    setError(null);
+    runQuery({ yColumn: numericColName });
   };
 
   const showChart = result && result.chart_spec && result.chart_type !== "table";
@@ -415,7 +495,7 @@ export default function ExplorePanel() {
             datetimeColumns={datetimeColumns}
             disabled={chartRules.yDisabled}
             disabledText="(Not required for Histogram)"
-            placeholder={chartRules.yRequired ? "Select Y-axis metric…" : "None (Count rows)"}
+            placeholder={chartRules.yRequired ? "Select Y-axis metric…" : "None (Count categories)"}
             allowClear={!chartRules.yRequired}
           />
 
@@ -428,8 +508,8 @@ export default function ExplorePanel() {
               disabled={!chartRules.aggAllowed}
               className="rounded-xl border border-stone-300/60 dark:border-white/[0.12] bg-[#f8f5ee] dark:bg-white/[0.04] px-3 py-2 text-sm text-[#262422] dark:text-[#f5f5f7] outline-none focus:ring-2 focus:ring-[#0071e3]/40 focus:border-[#0071e3] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {AGGREGATIONS.map((agg) => (
-                <option key={agg.id} value={agg.id}>
+              {availableAggregations.map((agg) => (
+                <option key={agg.id} value={agg.id} disabled={agg.disabled}>
                   {agg.label}
                 </option>
               ))}
@@ -437,13 +517,47 @@ export default function ExplorePanel() {
           </label>
         </div>
 
+        {/* Proactive Inline Incompatibility Notice with One-Click Fix */}
+        {aggregationIncompatibility && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-amber-800 dark:text-amber-200 text-xs animate-fade-in">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle size={16} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold">{aggregationIncompatibility.message}</span>
+                <p className="mt-0.5 text-amber-700 dark:text-amber-300 text-[11px]">
+                  Text columns cannot be mathematically aggregated with {aggregation.toUpperCase()}. Choose COUNT or pick a numeric column.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setAggregation("count")}
+                className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold transition-all shadow-xs cursor-pointer flex items-center gap-1.5"
+              >
+                <Wand2 size={12} />
+                Switch to COUNT
+              </button>
+              {numericColumns.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setYColumn(numericColumns[0].name)}
+                  className="px-3 py-1.5 rounded-xl bg-stone-200 hover:bg-stone-300 dark:bg-white/10 dark:hover:bg-white/20 text-[#262422] dark:text-[#f5f5f7] font-semibold transition-all cursor-pointer"
+                >
+                  Use {numericColumns[0].name}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Action Button Bar */}
         <div className="flex items-center justify-between pt-3 border-t border-black/[0.04] dark:border-white/[0.06]">
           <div className="text-xs text-[#86868b] dark:text-[#a1a1a6]">
             {schema?.column_count ? `${schema.column_count} columns available` : ""}
           </div>
           <button
-            onClick={runQuery}
+            onClick={() => runQuery()}
             disabled={loading || !isConfigurationValid}
             className="px-6 py-2.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white text-sm font-semibold shadow-[0_4px_14px_rgba(0,113,227,0.35)] hover:shadow-[0_6px_20px_rgba(0,113,227,0.45)] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all cursor-pointer"
           >
@@ -479,21 +593,52 @@ export default function ExplorePanel() {
         </div>
       )}
 
-      {/* Structured Error State */}
+      {/* Structured Error State with Actionable One-Click Correction */}
       {error && !loading && (
-        <div className="p-5 rounded-2xl bg-red-500/10 dark:bg-red-500/15 border border-red-500/30 text-red-900 dark:text-red-200 space-y-3 animate-fade-in">
+        <div className="p-5 rounded-2xl bg-red-500/10 dark:bg-red-500/15 border border-red-500/30 text-red-900 dark:text-red-200 space-y-3.5 animate-fade-in">
           <div className="flex items-start gap-3">
             <AlertCircle size={20} className="text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
             <div className="flex-1">
-              <h4 className="font-semibold text-sm">Failed to generate chart</h4>
+              <div className="flex items-center gap-2">
+                <h4 className="font-semibold text-sm">Failed to generate chart</h4>
+                {error.errorCode && (
+                  <span className="px-2 py-0.5 rounded-md bg-red-500/20 text-red-700 dark:text-red-300 font-mono text-[10px] font-bold">
+                    {error.errorCode}
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-red-800 dark:text-red-300 mt-1 leading-relaxed">
                 {error.message}
               </p>
             </div>
           </div>
-          <div className="flex justify-end gap-2 pt-1 border-t border-red-500/20">
+
+          {/* Actionable Suggestions */}
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-red-500/20">
+            {(error.suggestedAction === "switch_to_count" || error.errorCode === "INCOMPATIBLE_AGGREGATION") && (
+              <button
+                type="button"
+                onClick={handleSwitchToCountAndRun}
+                className="px-4 py-1.5 rounded-xl bg-[#0071e3] hover:bg-[#0077ed] text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+              >
+                <Wand2 size={12} />
+                Switch to COUNT Aggregation & Generate
+              </button>
+            )}
+
+            {numericColumns.length > 0 && error.errorCode === "INCOMPATIBLE_AGGREGATION" && (
+              <button
+                type="button"
+                onClick={() => handleSelectNumericAndRun(numericColumns[0].name)}
+                className="px-4 py-1.5 rounded-xl bg-stone-200 hover:bg-stone-300 dark:bg-white/10 dark:hover:bg-white/20 text-[#262422] dark:text-[#f5f5f7] text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                Use Numeric Column ({numericColumns[0].name})
+              </button>
+            )}
+
             <button
-              onClick={runQuery}
+              type="button"
+              onClick={() => runQuery()}
               className="px-4 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
             >
               <RefreshCw size={12} />
@@ -577,7 +722,7 @@ function CategorizedSelect({
           <option value="">{disabledText}</option>
         ) : (
           <>
-            <option value="">{allowClear ? "— None —" : placeholder}</option>
+            <option value="">{allowClear ? "— None (Frequency Count) —" : placeholder}</option>
 
             {numGroup.length > 0 && (
               <optgroup label="🔢 Numeric Columns">
