@@ -411,10 +411,10 @@ export default function ExplorePanel() {
           <select
             value={selectedFileIndex}
             onChange={(e) => setSelectedFileIndex(Number(e.target.value))}
-            className="flex-1 rounded-xl border border-stone-300/60 dark:border-white/[0.12] bg-[#f8f5ee] dark:bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-[#262422] dark:text-[#f5f5f7] outline-none focus:ring-2 focus:ring-[#0071e3]/40 focus:border-[#0071e3] transition-all cursor-pointer"
+            className="flex-1 rounded-xl border border-stone-300/60 dark:border-white/[0.15] bg-[#ffffff] dark:bg-[#1c1c1e] px-3.5 py-2 text-sm font-medium text-[#262422] dark:text-[#f5f5f7] outline-none focus:ring-2 focus:ring-[#0071e3]/40 focus:border-[#0071e3] transition-all cursor-pointer shadow-xs"
           >
             {files.map((f, idx) => (
-              <option key={f.table_name} value={idx}>
+              <option key={f.table_name} value={idx} className="bg-white dark:bg-[#1c1c1e] text-[#262422] dark:text-[#f5f5f7]">
                 {f.filename} — {f.table_name} ({f.schema?.row_count?.toLocaleString()} rows, {f.schema?.column_count} cols)
               </option>
             ))}
@@ -506,10 +506,15 @@ export default function ExplorePanel() {
               value={chartRules.aggAllowed ? aggregation : (chartRules.fixedAgg || "none")}
               onChange={(e) => setAggregation(e.target.value)}
               disabled={!chartRules.aggAllowed}
-              className="rounded-xl border border-stone-300/60 dark:border-white/[0.12] bg-[#f8f5ee] dark:bg-white/[0.04] px-3 py-2 text-sm text-[#262422] dark:text-[#f5f5f7] outline-none focus:ring-2 focus:ring-[#0071e3]/40 focus:border-[#0071e3] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              className="rounded-xl border border-stone-300/60 dark:border-white/[0.15] bg-[#ffffff] dark:bg-[#1c1c1e] px-3 py-2 text-sm text-[#262422] dark:text-[#f5f5f7] outline-none focus:ring-2 focus:ring-[#0071e3]/40 focus:border-[#0071e3] transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
             >
               {availableAggregations.map((agg) => (
-                <option key={agg.id} value={agg.id} disabled={agg.disabled}>
+                <option
+                  key={agg.id}
+                  value={agg.id}
+                  disabled={agg.disabled}
+                  className="bg-white dark:bg-[#1c1c1e] text-[#262422] dark:text-[#f5f5f7] disabled:text-stone-400"
+                >
                   {agg.label}
                 </option>
               ))}
@@ -716,18 +721,29 @@ function CategorizedSelect({
         value={disabled ? "" : value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        className="rounded-xl border border-stone-300/60 dark:border-white/[0.12] bg-[#f8f5ee] dark:bg-white/[0.04] px-3 py-2 text-sm text-[#262422] dark:text-[#f5f5f7] outline-none focus:ring-2 focus:ring-[#0071e3]/40 focus:border-[#0071e3] transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+        className="rounded-xl border border-stone-300/60 dark:border-white/[0.15] bg-[#ffffff] dark:bg-[#1c1c1e] px-3 py-2 text-sm text-[#262422] dark:text-[#f5f5f7] outline-none focus:ring-2 focus:ring-[#0071e3]/40 focus:border-[#0071e3] transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shadow-xs"
       >
         {disabled ? (
-          <option value="">{disabledText}</option>
+          <option value="" className="bg-white dark:bg-[#1c1c1e] text-stone-400">
+            {disabledText}
+          </option>
         ) : (
           <>
-            <option value="">{allowClear ? "— None (Frequency Count) —" : placeholder}</option>
+            <option value="" className="bg-white dark:bg-[#1c1c1e] text-[#262422] dark:text-[#f5f5f7]">
+              {allowClear ? "— None (Frequency Count) —" : placeholder}
+            </option>
 
             {numGroup.length > 0 && (
-              <optgroup label="🔢 Numeric Columns">
+              <optgroup
+                label="🔢 Numeric Columns"
+                className="bg-stone-100 dark:bg-[#252528] text-stone-700 dark:text-stone-300 font-semibold"
+              >
                 {numGroup.map((col) => (
-                  <option key={col.name} value={col.name}>
+                  <option
+                    key={col.name}
+                    value={col.name}
+                    className="bg-white dark:bg-[#1c1c1e] text-[#262422] dark:text-[#f5f5f7] font-normal"
+                  >
                     {col.name} ({col.dtype})
                   </option>
                 ))}
@@ -735,9 +751,16 @@ function CategorizedSelect({
             )}
 
             {catGroup.length > 0 && (
-              <optgroup label="🔤 Categorical / Text Columns">
+              <optgroup
+                label="🔤 Categorical / Text Columns"
+                className="bg-stone-100 dark:bg-[#252528] text-stone-700 dark:text-stone-300 font-semibold"
+              >
                 {catGroup.map((col) => (
-                  <option key={col.name} value={col.name}>
+                  <option
+                    key={col.name}
+                    value={col.name}
+                    className="bg-white dark:bg-[#1c1c1e] text-[#262422] dark:text-[#f5f5f7] font-normal"
+                  >
                     {col.name} ({col.dtype})
                   </option>
                 ))}
@@ -745,9 +768,16 @@ function CategorizedSelect({
             )}
 
             {dateGroup.length > 0 && (
-              <optgroup label="📅 Date & Time Columns">
+              <optgroup
+                label="📅 Date & Time Columns"
+                className="bg-stone-100 dark:bg-[#252528] text-stone-700 dark:text-stone-300 font-semibold"
+              >
                 {dateGroup.map((col) => (
-                  <option key={col.name} value={col.name}>
+                  <option
+                    key={col.name}
+                    value={col.name}
+                    className="bg-white dark:bg-[#1c1c1e] text-[#262422] dark:text-[#f5f5f7] font-normal"
+                  >
                     {col.name} ({col.dtype})
                   </option>
                 ))}
