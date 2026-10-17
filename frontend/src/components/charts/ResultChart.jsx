@@ -57,7 +57,9 @@ function buildTrace(chartType, spec) {
     case "histogram":
       return { x: spec.x, type: "histogram" };
     case "box":
-      return { y: spec.y, type: "box" };
+      return spec.x && spec.x.length > 0
+        ? { x: spec.x, y: spec.y, type: "box" }
+        : { y: spec.y, type: "box" };
     case "area":
       return { x: spec.x, y: spec.y, fill: "tozeroy", type: "scatter" };
     case "horizontal_bar":

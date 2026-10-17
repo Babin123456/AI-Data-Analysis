@@ -57,22 +57,62 @@ def select_chart_type(columns: list[str], rows: list[dict[str, Any]]) -> ChartTy
 
 
 def build_chart_spec(
-    chart_type: ChartType, columns: list[str], rows: list[dict[str, Any]]
+    chart_type: ChartType,
+    columns: list[str],
+    rows: list[dict[str, Any]],
+    x_col: str | None = None,
+    y_col: str | None = None,
 ) -> dict[str, Any]:
     """Build a minimal Plotly-friendly spec the frontend can render directly."""
     if chart_type == "table" or not rows:
         return {"type": "table", "columns": columns, "rows": rows}
 
-    non_numeric = [c for c in columns if not _is_numeric(rows[0].get(c))]
-    numeric = [c for c in columns if _is_numeric(rows[0].get(c))]
+    # Resolve actual X column
+    if x_col and x_col in columns:
+        actual_x = x_col
+    else:
+        non_numeric = [c for c in columns if not _is_numeric(rows[0].get(c))]
+        actual_x = non_numeric[0] if non_numeric else columns[0]
 
-    x_col = non_numeric[0] if non_numeric else columns[0]
-    y_col = numeric[0] if numeric else (columns[1] if len(columns) > 1 else columns[0])
+    # Resolve actual Y column
+    if y_col and y_col in columns:
+        actual_y = y_col
+    else:
+        remaining = [c for c in columns if c != actual_x]
+        numeric = [c for c in remaining if _is_numeric(rows[0].get(c))]
+        actual_y = numeric[0] if numeric else (remaining[0] if remaining else actual_x)
 
+    # Histogram: Plotly automatically calculates bins from raw numeric X values
+    if chart_type == "histogram":
+        return {
+            "type": "histogram",
+            "x": [row.get(actual_x) for row in rows],
+            "x_label": actual_x,
+            "y_label": "Frequency",
+        }
+
+    # Box plot: handles grouped box plot or single-distribution box plot
+    if chart_type == "box":
+        if x_col and y_col and x_col in columns and y_col in columns and x_col != y_col:
+            return {
+                "type": "box",
+                "x": [row.get(actual_x) for row in rows],
+                "y": [row.get(actual_y) for row in rows],
+                "x_label": actual_x,
+                "y_label": actual_y,
+            }
+        metric_col = actual_y if (y_col and y_col in columns) else actual_x
+        return {
+            "type": "box",
+            "y": [row.get(metric_col) for row in rows],
+            "y_label": metric_col,
+        }
+
+    # Standard charts: bar, line, pie, scatter, area, horizontal_bar
     return {
         "type": chart_type,
-        "x": [row.get(x_col) for row in rows],
-        "y": [row.get(y_col) for row in rows],
-        "x_label": x_col,
-        "y_label": y_col,
+        "x": [row.get(actual_x) for row in rows],
+        "y": [row.get(actual_y) for row in rows],
+        "x_label": actual_x,
+        "y_label": actual_y,
     }

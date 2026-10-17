@@ -28,6 +28,7 @@ class ColumnSchema(BaseModel):
     is_numeric: bool = False
     is_datetime: bool = False
     is_categorical: bool = False
+    is_boolean: bool = False
 
 
 class DatasetSchema(BaseModel):

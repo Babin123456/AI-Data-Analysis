@@ -11,10 +11,15 @@ from app.models.schemas import ColumnSchema, DatasetSchema
 from app.validation.sql_validator import escape_sql_identifier
 
 _NUMERIC_TYPES = {
-    "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
-    "FLOAT", "DOUBLE", "DECIMAL", "REAL",
+    "TINYINT", "SMALLINT", "INTEGER", "INT", "INT1", "INT2", "INT4", "INT8",
+    "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT",
+    "FLOAT", "FLOAT4", "FLOAT8", "DOUBLE", "DOUBLE PRECISION", "DECIMAL", "NUMERIC", "REAL",
 }
-_DATETIME_TYPES = {"DATE", "TIME", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE"}
+_DATETIME_TYPES = {
+    "DATE", "TIME", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE", "TIMESTAMPTZ",
+    "TIMESTAMP_S", "TIMESTAMP_MS", "TIMESTAMP_NS", "INTERVAL", "TIME WITH TIME ZONE",
+}
+_BOOLEAN_TYPES = {"BOOLEAN", "BOOL"}
 
 _schema_cache: dict[str, DatasetSchema] = {}
 
@@ -32,7 +37,7 @@ def extract_table_schema(conn: duckdb.DuckDBPyConnection, dataset_id: str, table
     columns: list[ColumnSchema] = []
     for col_name, col_type, *_rest in describe_rows:
         safe_col = escape_sql_identifier(col_name)
-        base_type = col_type.split("(")[0].upper()
+        base_type = col_type.split("(")[0].strip().upper()
         missing = conn.execute(
             f"SELECT COUNT(*) FROM {safe_table} WHERE {safe_col} IS NULL"
         ).fetchone()[0]
@@ -42,8 +47,12 @@ def extract_table_schema(conn: duckdb.DuckDBPyConnection, dataset_id: str, table
 
         is_numeric = base_type in _NUMERIC_TYPES
         is_datetime = base_type in _DATETIME_TYPES
-        is_categorical = (not is_numeric) and (not is_datetime) and (
-            row_count == 0 or distinct / max(row_count, 1) < 0.5
+        is_boolean = base_type in _BOOLEAN_TYPES
+        is_categorical = (
+            is_boolean
+            or base_type in {"VARCHAR", "TEXT", "STRING", "CHAR", "BPCHAR"}
+            or ((not is_numeric) and (not is_datetime))
+            or (row_count > 0 and distinct / max(row_count, 1) < 0.2 and not is_datetime)
         )
 
         columns.append(
@@ -54,6 +63,7 @@ def extract_table_schema(conn: duckdb.DuckDBPyConnection, dataset_id: str, table
                 is_numeric=is_numeric,
                 is_datetime=is_datetime,
                 is_categorical=is_categorical,
+                is_boolean=is_boolean,
             )
         )
 
