@@ -1,4 +1,4 @@
-"""Whitelist-based SQL validation and SQL identifier escaping.
+"""Whitelist-based SQL validation, table authorization, and SQL identifier escaping.
 
 Only read-only analytical queries are allowed. Anything that could
 mutate data or schema, access external files, read environment variables,
@@ -7,10 +7,11 @@ or call dangerous DuckDB functions is rejected before reaching the database.
 from __future__ import annotations
 
 import re
+from typing import Iterable
 
 import sqlparse
-from sqlparse.sql import Statement
-from sqlparse.tokens import DDL, DML
+from sqlparse.sql import Identifier, IdentifierList, Statement, Token, TokenList
+from sqlparse.tokens import DDL, DML, Keyword, Name
 
 ALLOWED_STATEMENT_TYPES = {"SELECT"}
 ALLOWED_LEADING_KEYWORDS = {"SELECT", "WITH"}
@@ -29,6 +30,14 @@ FORBIDDEN_KEYWORDS = {
     "GETENV", "CURRENT_SETTING", "SET_VARIABLE", "SYSTEM",
     "QUERY", "QUERY_TABLE", "SQL",
 }
+
+# Forbidden system schemas and tables
+FORBIDDEN_TABLE_PREFIXES = (
+    "information_schema",
+    "pg_catalog",
+    "duckdb_",
+    "sqlite_",
+)
 
 # Extra defense against stacked/chained statements.
 _MULTI_STATEMENT_PATTERN = re.compile(r";\s*\S")
@@ -49,7 +58,89 @@ def escape_sql_identifier(identifier: str) -> str:
     return f'"{escaped}"'
 
 
-def validate_sql(sql: str) -> str:
+def _clean_identifier_name(val: str) -> str:
+    """Strip quotes and leading/trailing whitespace from an identifier."""
+    val = val.strip()
+    if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+        return val[1:-1].strip()
+    return val
+
+
+def extract_table_names_from_sql(sql: str) -> tuple[set[str], set[str]]:
+    """Extract table references and CTE names from a SQL statement.
+
+    Returns (tables_referenced, cte_names).
+    """
+    cleaned = sqlparse.format(sql, strip_comments=True).strip()
+    parsed = sqlparse.parse(cleaned)
+    if not parsed:
+        return set(), set()
+
+    statement = parsed[0]
+    cte_names: set[str] = set()
+    tables_referenced: set[str] = set()
+
+    # 1. Identify CTE names defined in WITH clause
+    tokens = list(statement.flatten())
+    upper_tokens = [t.value.upper() for t in tokens if not t.is_whitespace]
+    if upper_tokens and upper_tokens[0] == "WITH":
+        # Search for pattern: Identifier AS (
+        for i, token in enumerate(tokens):
+            if token.value.upper() == "AS":
+                # Look backwards for the identifier
+                prev_idx = i - 1
+                while prev_idx >= 0 and tokens[prev_idx].is_whitespace:
+                    prev_idx -= 1
+                if prev_idx >= 0:
+                    cte_names.add(_clean_identifier_name(tokens[prev_idx].value).lower())
+
+    # 2. Extract table names after FROM / JOIN keywords
+    from_join_keywords = {"FROM", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "CROSS JOIN"}
+    
+    def _traverse(token_list: TokenList):
+        nonlocal from_join_keywords, tables_referenced
+        from_seen = False
+        for token in token_list.tokens:
+            if token.is_whitespace:
+                continue
+
+            if isinstance(token, TokenList) and not isinstance(token, (Identifier, IdentifierList)):
+                _traverse(token)
+                continue
+
+            val = token.value.strip().upper()
+            if val in from_join_keywords or token.match(Keyword, ["FROM", "JOIN"]):
+                from_seen = True
+                continue
+
+            if from_seen:
+                # If we encounter a subquery (starts with '(') or another keyword, reset from_seen
+                if token.value.startswith("("):
+                    from_seen = False
+                    if isinstance(token, TokenList):
+                        _traverse(token)
+                    continue
+
+                if isinstance(token, IdentifierList):
+                    for id_token in token.get_identifiers():
+                        raw_name = id_token.get_real_name() or id_token.value.split()[0]
+                        tables_referenced.add(_clean_identifier_name(raw_name).lower())
+                    from_seen = False
+                elif isinstance(token, Identifier):
+                    raw_name = token.get_real_name() or token.value.split()[0]
+                    tables_referenced.add(_clean_identifier_name(raw_name).lower())
+                    from_seen = False
+                elif token.ttype in (Name, Keyword):
+                    tables_referenced.add(_clean_identifier_name(token.value).lower())
+                    from_seen = False
+                elif token.is_keyword:
+                    from_seen = False
+
+    _traverse(statement)
+    return tables_referenced, cte_names
+
+
+def validate_sql(sql: str, allowed_tables: Iterable[str] | None = None) -> str:
     """Validate a generated SQL string. Returns the cleaned SQL or raises SQLValidationError."""
     if not sql or not sql.strip():
         raise SQLValidationError("Generated SQL is empty.")
@@ -84,6 +175,27 @@ def validate_sql(sql: str) -> str:
     for forbidden in FORBIDDEN_KEYWORDS:
         if re.search(rf"\b{forbidden}\b", upper_sql):
             raise SQLValidationError(f"Forbidden keyword or function detected: {forbidden}")
+
+    # Check for unauthorized system schema access
+    for prefix in FORBIDDEN_TABLE_PREFIXES:
+        if re.search(rf"\b{prefix}", upper_sql, re.IGNORECASE):
+            raise SQLValidationError(f"Access to system table or schema '{prefix}' is forbidden.")
+
+    # Table authorization check (if allowed_tables provided)
+    if allowed_tables is not None:
+        allowed_set = {t.lower() for t in allowed_tables}
+        # Also include legacy table name if needed
+        allowed_set.add("uploaded_data")
+        referenced_tables, cte_names = extract_table_names_from_sql(cleaned_no_comments)
+        for tbl in referenced_tables:
+            # Skip if it's a CTE or known safe built-in table function
+            if tbl in cte_names or tbl in ("generate_series", "range", "unnest", "values"):
+                continue
+            if tbl not in allowed_set:
+                raise SQLValidationError(
+                    f"Access to unauthorized or unknown table '{tbl}' is forbidden. "
+                    f"Allowed tables: {sorted(list(allowed_set))}"
+                )
 
     return cleaned
 

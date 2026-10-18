@@ -8,24 +8,48 @@ import { exportChatAsHtml } from "../../utils/exportChat.js";
 import { ChatAiSkeleton } from "../shared/CardSkeleton.jsx";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus.js";
 import { toast } from "react-toastify";
-import { AlertTriangle, Download, Trash2, Send, MessageSquare, Copy, Check } from "lucide-react";
+import {
+  AlertTriangle,
+  Download,
+  Trash2,
+  Send,
+  MessageSquare,
+  Copy,
+  Check,
+  HelpCircle,
+  Sparkles,
+  Info,
+} from "lucide-react";
 
 const EXAMPLE_QUESTIONS = [
   "Which category has the highest total?",
   "Show the trend over time.",
   "What is the average value?",
   "Top 10 records.",
-  "How many records have missing values?",
+  "What columns are in this dataset?",
 ];
 
+function generateConversationId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `conv_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+}
+
 export default function ChatPanel() {
-  const { dataset, activeFile, chatMessages, setChatMessages, clearChat } = useDataset();
+  const { dataset, activeFile, chatMessages, setChatMessages, clearChat: baseClearChat } = useDataset();
   const { isSlowNetwork } = useNetworkStatus();
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [popup, setPopup] = useState(null); // off-topic popup message
   const [copiedIndex, setCopiedIndex] = useState(null);
+  const [conversationId, setConversationId] = useState(generateConversationId);
   const bottomRef = useRef(null);
+
+  const clearChat = () => {
+    baseClearChat();
+    setConversationId(generateConversationId());
+  };
 
   const handleCopyQuery = async (text, index) => {
     try {
@@ -69,6 +93,7 @@ export default function ChatPanel() {
   }, [dataset]);
 
   const send = async (question) => {
+    if (isLoading) return;
     const raw = question ?? input;
     const q = raw.trim();
     if (!q || !dataset) return;
@@ -86,11 +111,10 @@ export default function ChatPanel() {
     setIsLoading(true);
 
     try {
-      const { data } = await askQuestion(targetDatasetId, q, null, targetTableName);
+      const { data } = await askQuestion(targetDatasetId, q, conversationId, targetTableName);
 
-      // Off-topic without specific answer: show popup
+      // Off-topic popup if marked off_topic without an answer
       if (data.off_topic && !data.answer) {
-        // Remove the user message we just added
         setChatMessages((prev) => prev.slice(0, -1));
         const warnMsg = "I can only help with questions about your uploaded data.";
         setPopup(warnMsg);
@@ -98,7 +122,14 @@ export default function ChatPanel() {
         return;
       }
 
-      setChatMessages((prev) => [...prev, { role: "assistant", ...data }]);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          ...data,
+          response_type: data.response_type || (data.sql ? "data" : "text"),
+        },
+      ]);
     } catch (err) {
       const httpStatus = err?.response?.status;
       let errMsg;
@@ -117,13 +148,14 @@ export default function ChatPanel() {
         {
           role: "assistant",
           content: errMsg,
-          warning: true,
+          answer: errMsg,
+          response_type: "error",
+          warning: errMsg,
         },
       ]);
     } finally {
       setIsLoading(false);
     }
-
   };
 
   if (!dataset) {
@@ -153,7 +185,7 @@ export default function ChatPanel() {
             Ask AI Assistant
           </h2>
           <p className="text-xs text-[#86868b] dark:text-[#a1a1a6] mt-0.5 font-sans">
-            Natural language to DuckDB SQL powered by Groq Llama 3.3 70B.
+            Natural language analysis & DuckDB SQL powered by Groq Llama 3.3.
           </p>
         </div>
 
@@ -161,7 +193,7 @@ export default function ChatPanel() {
           {chatMessages.some((m) => m.role === "assistant" && m.sql) && (
             <button
               onClick={() => exportChatAsHtml(chatMessages, dataset.filename)}
-              className="flex items-center gap-1.5 text-xs text-[#0071e3] hover:text-[#0077ed] transition-colors px-2.5 py-1 rounded-xl bg-[#0071e3]/10 dark:bg-[#0071e3]/20 font-semibold"
+              className="flex items-center gap-1.5 text-xs text-[#0071e3] hover:text-[#0077ed] transition-colors px-2.5 py-1 rounded-xl bg-[#0071e3]/10 dark:bg-[#0071e3]/20 font-semibold cursor-pointer"
               title="Download entire chat as HTML report"
             >
               <Download size={13} /> Export Report
@@ -170,7 +202,7 @@ export default function ChatPanel() {
           {chatMessages.length > 0 && (
             <button
               onClick={clearChat}
-              className="flex items-center gap-1.5 text-xs text-[#86868b] hover:text-red-500 transition-colors px-2.5 py-1 rounded-xl hover:bg-black/[0.04] dark:hover:bg-white/[0.06] font-medium"
+              className="flex items-center gap-1.5 text-xs text-[#86868b] hover:text-red-500 transition-colors px-2.5 py-1 rounded-xl hover:bg-black/[0.04] dark:hover:bg-white/[0.06] font-medium cursor-pointer"
               title="Clear chat history"
             >
               <Trash2 size={13} /> Clear
@@ -233,26 +265,65 @@ export default function ChatPanel() {
               </div>
             ) : (
               <div className="chat-ai-bubble w-full max-w-[95%] space-y-2.5">
+                {/* Structured bubble based on response_type */}
                 <div
                   className={`rounded-2xl rounded-tl-xs p-4 shadow-2xs border ${
-                    m.warning
-                       ? "bg-amber-500/[0.08] border-amber-500/30 text-amber-900 dark:text-amber-200"
-                       : "bg-[#fcfaf5]/85 dark:bg-[#1c1c1e]/80 backdrop-blur-xl border-stone-200/80 dark:border-white/[0.08]"
+                    m.response_type === "error" || m.warning
+                      ? "bg-amber-500/[0.08] border-amber-500/30 text-amber-900 dark:text-amber-200"
+                      : m.response_type === "clarification"
+                      ? "bg-blue-500/[0.06] border-blue-500/30 text-[#1d1d1f] dark:text-[#f5f5f7]"
+                      : "bg-[#fcfaf5]/85 dark:bg-[#1c1c1e]/80 backdrop-blur-xl border-stone-200/80 dark:border-white/[0.08]"
                   }`}
                 >
-                  <div className="prose dark:prose-invert max-w-none text-sm leading-relaxed text-[#262422] dark:text-[#f5f5f7]">
+                  {/* Badge header for clarification or explanation */}
+                  {m.response_type === "clarification" && (
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-blue-600 dark:text-blue-400 mb-2">
+                      <HelpCircle size={14} />
+                      <span>Clarification Needed</span>
+                    </div>
+                  )}
+
+                  {m.intent === "dataset_explanation" && (
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-teal-600 dark:text-teal-400 mb-2">
+                      <Info size={14} />
+                      <span>Dataset Schema & Structure</span>
+                    </div>
+                  )}
+
+                  {m.response_type === "error" && (
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-600 dark:text-amber-400 mb-2">
+                      <AlertTriangle size={14} />
+                      <span>Notice</span>
+                    </div>
+                  )}
+
+                  <div className="prose dark:prose-invert max-w-none text-sm leading-relaxed text-[#262422] dark:text-[#f5f5f7] whitespace-pre-line">
                     {m.answer || m.content}
                   </div>
-                  {m.warning && typeof m.warning === "string" && (
+
+                  {m.warning && typeof m.warning === "string" && m.response_type !== "error" && (
                     <p className="text-xs mt-2 text-amber-600 dark:text-amber-400 flex items-center gap-1">
                       <AlertTriangle size={12} /> {m.warning}
                     </p>
                   )}
                 </div>
-                {m.sql && <SqlViewer sql={m.sql} />}
-                {m.columns?.length > 0 && m.rows?.length > 0 && (
+
+                {/* Render SQL only for data queries with valid SQL (never empty blocks) */}
+                {m.response_type === "data" && m.sql && m.sql.trim().length > 0 && (
+                  <SqlViewer sql={m.sql} />
+                )}
+
+                {/* Render Result Table only when data exists */}
+                {m.response_type === "data" && m.columns?.length > 0 && m.rows?.length > 0 && (
                   <div className="max-h-64 overflow-y-auto rounded-xl">
                     <ResultTable columns={m.columns} rows={m.rows} />
+                  </div>
+                )}
+
+                {/* Friendly notice if data query returned empty rows */}
+                {m.response_type === "data" && m.columns?.length > 0 && (!m.rows || m.rows.length === 0) && (
+                  <div className="text-xs text-stone-500 dark:text-stone-400 px-3 py-2 rounded-xl bg-black/[0.02] dark:bg-white/[0.02] border border-stone-200/50 dark:border-white/[0.05]">
+                    No rows matched your query criteria.
                   </div>
                 )}
               </div>

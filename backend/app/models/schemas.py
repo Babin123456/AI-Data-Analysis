@@ -77,6 +77,22 @@ class ExploreRequest(BaseModel):
     table_name: str | None = Field(default=None, max_length=128)
 
 
+ChatIntent = Literal[
+    "sql_query",
+    "dataset_explanation",
+    "greeting",
+    "off_topic",
+    "clarification",
+]
+
+ChatResponseType = Literal[
+    "data",
+    "text",
+    "clarification",
+    "error",
+]
+
+
 class ChatRequest(BaseModel):
     dataset_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     question: str = Field(..., min_length=1, max_length=2000)
@@ -86,13 +102,21 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
+    intent: ChatIntent = "sql_query"
+    response_type: ChatResponseType = "data"
     sql: str | None = None
     columns: list[str] = []
     rows: list[dict[str, Any]] = []
+    table: list[dict[str, Any]] | None = None
+    error: dict[str, Any] | None = None
+    session_id: str | None = None
+    dataset_id: str | None = None
+    request_id: str = ""
     chart_type: ChartType | None = None
     chart_spec: dict[str, Any] | None = None
     warning: str | None = None
     off_topic: bool = False
+
 
 
 class ErrorResponse(BaseModel):

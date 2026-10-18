@@ -1,18 +1,21 @@
-"""AI Chat endpoint: natural language question -> generated SQL ->
-validated + executed query -> plain-English explanation + results.
+"""AI Chat endpoint: natural language question -> validated intent routing ->
+safe SQL execution with bounded repair -> plain-English explanation + structured results.
 """
 from __future__ import annotations
 
 import logging
+import time
+import uuid
 from fastapi import APIRouter, HTTPException, Request
 
 from app.db.duckdb_manager import duckdb_manager
 from app.models.schemas import ChatRequest, ChatResponse
-from app.services.llm_service import LLMServiceError, llm_service
+from app.services.chat_session_service import chat_session_service
+from app.services.dataset_explainer import explain_dataset
+from app.services.intent_service import intent_service
 from app.services.schema_service import extract_all_schemas
+from app.services.sql_pipeline import sql_pipeline
 from app.utils.rate_limit import chat_limiter
-from app.validation.prompt_guard import is_prompt_injection
-from app.validation.sql_validator import SQLValidationError, validate_sql
 
 logger = logging.getLogger(__name__)
 
@@ -21,21 +24,27 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 @router.post("", response_model=ChatResponse)
 async def chat(req: ChatRequest, request: Request) -> ChatResponse:
-    # Apply Rate limiting (max 15 chat queries per minute per IP)
+    start_time = time.time()
+    request_id = str(uuid.uuid4())
+
+    # 1. Rate limiting (max 15 chat queries per minute per IP)
     client_ip = request.client.host if request.client else "unknown"
     chat_limiter.check_rate_limit(ip=client_ip)
 
-    # --- 0. Prompt Injection & Destructive Query Guard (Zero-latency local check) ---
-    is_injection, reason = is_prompt_injection(req.question)
-    if is_injection:
-        return ChatResponse(
-            answer="I can only help you analyze and query your uploaded data.",
-            sql=None,
-            columns=[],
-            rows=[],
-            chart_type=None,
-            chart_spec=None,
-            warning=None,
+    logger.info(
+        "Chat request received [request_id=%s] dataset_id=%s session_id=%s q_len=%d",
+        request_id,
+        req.dataset_id,
+        req.conversation_id,
+        len(req.question),
+    )
+
+    # 2. Dataset Authorization & Retrieval
+    if not duckdb_manager.exists(req.dataset_id):
+        logger.warning("Dataset not found or expired: %s", req.dataset_id)
+        raise HTTPException(
+            status_code=404,
+            detail="Dataset session not found or expired. Please upload or reload your dataset.",
         )
 
     try:
@@ -44,109 +53,189 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         raise HTTPException(status_code=404, detail="Dataset not found or expired.") from exc
 
     schemas = extract_all_schemas(conn, req.dataset_id)
+    if not schemas:
+        raise HTTPException(status_code=400, detail="No readable tables found in the active dataset.")
 
-    # --- 1. Fast Intent Guard (Local Only - No LLM call) ---
-    fast_match = llm_service.fast_intent_match(req.question)
-    if fast_match:
-        intent_type, direct_reply = fast_match
+    # 3. Load Session Context
+    session_id = req.conversation_id or ""
+    context_summary = chat_session_service.get_context_summary(req.dataset_id, session_id)
+    has_prior_context = bool(context_summary)
+
+    # 4. Intent Classification
+    intent, direct_reply = intent_service.classify(
+        question=req.question,
+        schemas=schemas,
+        has_prior_context=has_prior_context,
+    )
+
+    logger.info(
+        "Intent classified [request_id=%s] intent=%s has_prior=%s",
+        request_id,
+        intent,
+        has_prior_context,
+    )
+
+    # 5. Route to appropriate handler based on classified intent
+
+    # Handler A: Greeting / Pleasantries
+    if intent == "greeting":
+        answer = direct_reply or "Hello! 👋 How can I help you analyze your data today?"
+        chat_session_service.record_turn(
+            dataset_id=req.dataset_id,
+            session_id=session_id,
+            question=req.question,
+            intent=intent,
+            answer=answer,
+        )
         return ChatResponse(
-            answer=direct_reply,
+            answer=answer,
+            intent="greeting",
+            response_type="text",
             sql=None,
             columns=[],
             rows=[],
-            chart_type=None,
-            chart_spec=None,
-            off_topic=(intent_type == "OFF_TOPIC"),
+            table=[],
+            session_id=session_id,
+            dataset_id=req.dataset_id,
+            request_id=request_id,
+            off_topic=False,
         )
-    # -------------------------------------------------------
 
-    raw_sql = None
-    safe_sql = None
-    df = None
-    sql_error = None
-    sql_error_msg = ""
-
-    # --- 2. Optimistic SQL Generation & Execution ---
-    try:
-        raw_sql = llm_service.generate_sql(req.question, schemas, target_table=req.table_name)
-        safe_sql = validate_sql(raw_sql)
-        
-        # Enforce a hard limit of 100 rows to prevent massive payloads.
-        # We wrap it dynamically so the user still sees the clean 'safe_sql' in the UI.
-        bounded_sql = f"SELECT * FROM ({safe_sql}) LIMIT 100"
-        df = conn.execute(bounded_sql).fetch_df()
-    except LLMServiceError as exc:
-        # Could be an empty response because it's not a data query, or Groq API error
-        sql_error = exc
-        sql_error_msg = str(exc)
-    except SQLValidationError as exc:
-        # Invalid SQL (or prompt injection attempt)
-        sql_error = exc
-        sql_error_msg = str(exc)
-    except Exception as exc:  # noqa: BLE001
-        # DuckDB execution error (table/column not found, etc.)
-        sql_error = exc
-        sql_error_msg = str(exc)
-
-    # --- 3. Fallback Intent Analysis (Only if SQL failed) ---
-    if sql_error is not None:
-        try:
-            intent_type, direct_reply = llm_service.analyze_intent(req.question)
-        except LLMServiceError:
-            intent_type, direct_reply = "DATA_QUERY", ""
-
-        if intent_type in ("GREETING", "OFF_TOPIC"):
-            return ChatResponse(
-                answer=direct_reply or "Hello! 👋 How can I help you analyze your data today?",
-                sql=None,
-                columns=[],
-                rows=[],
-                chart_type=None,
-                chart_spec=None,
-                off_topic=(intent_type == "OFF_TOPIC"),
-            )
-
-        # If it failed to generate SQL entirely:
-        if raw_sql is None:
-            if isinstance(sql_error, SQLValidationError):
-                return ChatResponse(
-                    answer="I can only help you analyze and query your uploaded data.",
-                    sql=None,
-                    columns=[],
-                    rows=[],
-                    warning=None,
-                )
-            logger.error(f"SQL generation failed: {sql_error}", exc_info=True)
-            raise HTTPException(status_code=503, detail=sql_error_msg)
-
-        # If it failed validation or execution:
-        answer_msg = (
-            "I can only help you analyze and query your uploaded data."
-            if isinstance(sql_error, SQLValidationError)
-            else "The generated query failed to run against your dataset."
+    # Handler B: Off-topic Request
+    if intent == "off_topic":
+        answer = direct_reply or "I am an AI Data Analyst specialized in querying your uploaded data. Please ask a question related to your dataset."
+        chat_session_service.record_turn(
+            dataset_id=req.dataset_id,
+            session_id=session_id,
+            question=req.question,
+            intent=intent,
+            answer=answer,
         )
         return ChatResponse(
-            answer=answer_msg,
-            sql=None,  # NEVER leak unvalidated or rejected raw SQL
+            answer=answer,
+            intent="off_topic",
+            response_type="text",
+            sql=None,
             columns=[],
             rows=[],
-            warning=None if isinstance(sql_error, SQLValidationError) else sql_error_msg,
+            table=[],
+            session_id=session_id,
+            dataset_id=req.dataset_id,
+            request_id=request_id,
+            off_topic=True,
         )
 
-    # --- 4. Explain Results (Only on successful execution) ---
-    columns = list(df.columns)
-    rows = df.to_dict(orient="records")
+    # Handler C: Dataset Explanation / Schema Questions
+    if intent == "dataset_explanation":
+        answer = explain_dataset(schemas=schemas, question=req.question)
+        chat_session_service.record_turn(
+            dataset_id=req.dataset_id,
+            session_id=session_id,
+            question=req.question,
+            intent=intent,
+            answer=answer,
+        )
+        return ChatResponse(
+            answer=answer,
+            intent="dataset_explanation",
+            response_type="text",
+            sql=None,
+            columns=[],
+            rows=[],
+            table=[],
+            session_id=session_id,
+            dataset_id=req.dataset_id,
+            request_id=request_id,
+            off_topic=False,
+        )
 
-    try:
-        explanation = llm_service.explain_results(req.question, columns, rows)
-    except Exception:  # noqa: BLE001
-        explanation = "Here are the results for your question."
+    # Handler D: Clarification Needed
+    if intent == "clarification":
+        answer = direct_reply or "Could you please specify which columns or criteria you would like to analyze?"
+        chat_session_service.record_turn(
+            dataset_id=req.dataset_id,
+            session_id=session_id,
+            question=req.question,
+            intent=intent,
+            answer=answer,
+        )
+        return ChatResponse(
+            answer=answer,
+            intent="clarification",
+            response_type="clarification",
+            sql=None,
+            columns=[],
+            rows=[],
+            table=[],
+            session_id=session_id,
+            dataset_id=req.dataset_id,
+            request_id=request_id,
+            off_topic=False,
+        )
 
+    # Handler E: SQL Query Execution & Repair Pipeline
+    pipeline_result = sql_pipeline.run(
+        conn=conn,
+        dataset_id=req.dataset_id,
+        question=req.question,
+        schemas=schemas,
+        target_table=req.table_name,
+        conversation_context=context_summary,
+    )
+
+    elapsed_ms = (time.time() - start_time) * 1000
+    logger.info(
+        "SQL pipeline completed [request_id=%s] success=%s empty=%s duration_ms=%.1f",
+        request_id,
+        pipeline_result.success,
+        pipeline_result.is_empty,
+        elapsed_ms,
+    )
+
+    if pipeline_result.success:
+        chat_session_service.record_turn(
+            dataset_id=req.dataset_id,
+            session_id=session_id,
+            question=req.question,
+            intent="sql_query",
+            sql=pipeline_result.sql,
+            answer=pipeline_result.answer,
+        )
+        return ChatResponse(
+            answer=pipeline_result.answer,
+            intent="sql_query",
+            response_type="data",
+            sql=pipeline_result.sql,
+            columns=pipeline_result.columns,
+            rows=pipeline_result.rows,
+            table=pipeline_result.rows,
+            session_id=session_id,
+            dataset_id=req.dataset_id,
+            request_id=request_id,
+            off_topic=False,
+        )
+
+    # Execution / Validation failure: strictly separated from intent errors
+    chat_session_service.record_turn(
+        dataset_id=req.dataset_id,
+        session_id=session_id,
+        question=req.question,
+        intent="sql_query",
+        sql=None,
+        answer=pipeline_result.answer,
+    )
     return ChatResponse(
-        answer=explanation,
-        sql=safe_sql,
-        columns=columns,
-        rows=rows,
-        chart_type=None,
-        chart_spec=None,
+        answer=pipeline_result.answer,
+        intent="sql_query",
+        response_type="error",
+        sql=None,
+        columns=[],
+        rows=[],
+        table=[],
+        error=pipeline_result.error_info,
+        warning=pipeline_result.error_info.get("message") if pipeline_result.error_info else None,
+        session_id=session_id,
+        dataset_id=req.dataset_id,
+        request_id=request_id,
+        off_topic=False,
     )
