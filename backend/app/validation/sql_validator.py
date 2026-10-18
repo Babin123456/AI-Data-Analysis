@@ -10,7 +10,15 @@ import re
 from typing import Iterable
 
 import sqlparse
-from sqlparse.sql import Identifier, IdentifierList, Statement, Token, TokenList
+from sqlparse.sql import (
+    Function,
+    Identifier,
+    IdentifierList,
+    Parenthesis,
+    Statement,
+    Token,
+    TokenList,
+)
 from sqlparse.tokens import DDL, DML, Keyword, Name
 
 ALLOWED_STATEMENT_TYPES = {"SELECT"}
@@ -80,32 +88,44 @@ def extract_table_names_from_sql(sql: str) -> tuple[set[str], set[str]]:
     cte_names: set[str] = set()
     tables_referenced: set[str] = set()
 
-    # 1. Identify CTE names defined in WITH clause
-    tokens = list(statement.flatten())
-    upper_tokens = [t.value.upper() for t in tokens if not t.is_whitespace]
-    if upper_tokens and upper_tokens[0] == "WITH":
-        # Search for pattern: Identifier AS (
-        for i, token in enumerate(tokens):
-            if token.value.upper() == "AS":
-                # Look backwards for the identifier
-                prev_idx = i - 1
-                while prev_idx >= 0 and tokens[prev_idx].is_whitespace:
-                    prev_idx -= 1
-                if prev_idx >= 0:
-                    cte_names.add(_clean_identifier_name(tokens[prev_idx].value).lower())
+    # 1. Identify CTE names strictly defined in the WITH clause preamble
+    first_tok = None
+    for t in statement.tokens:
+        if not t.is_whitespace:
+            first_tok = t
+            break
 
-    # 2. Extract table names after FROM / JOIN keywords
+    if first_tok and first_tok.value.upper() == "WITH":
+        for t in statement.tokens:
+            if t.is_whitespace or t == first_tok:
+                continue
+            # Stop inspecting CTE definitions once the main query statement starts
+            if t.ttype is DML or t.value.upper() in ("SELECT", "VALUES"):
+                break
+
+            candidates = []
+            if isinstance(t, IdentifierList):
+                candidates.extend(t.get_identifiers())
+            elif isinstance(t, Identifier):
+                candidates.append(t)
+
+            for c in candidates:
+                sub_tokens = [tok for tok in c.tokens if not tok.is_whitespace]
+                for idx, stok in enumerate(sub_tokens):
+                    if stok.value.upper() == "AS" and idx > 0 and idx + 1 < len(sub_tokens):
+                        next_tok = sub_tokens[idx + 1]
+                        if isinstance(next_tok, Parenthesis) or next_tok.value.startswith("("):
+                            cte_name = _clean_identifier_name(sub_tokens[idx - 1].value).lower()
+                            cte_names.add(cte_name)
+
+    # 2. Extract table names after FROM / JOIN keywords and within subqueries/CTEs
     from_join_keywords = {"FROM", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "CROSS JOIN"}
-    
+
     def _traverse(token_list: TokenList):
         nonlocal from_join_keywords, tables_referenced
         from_seen = False
         for token in token_list.tokens:
             if token.is_whitespace:
-                continue
-
-            if isinstance(token, TokenList) and not isinstance(token, (Identifier, IdentifierList)):
-                _traverse(token)
                 continue
 
             val = token.value.strip().upper()
@@ -114,7 +134,7 @@ def extract_table_names_from_sql(sql: str) -> tuple[set[str], set[str]]:
                 continue
 
             if from_seen:
-                # If we encounter a subquery (starts with '(') or another keyword, reset from_seen
+                # If we encounter a subquery (starts with '('), reset from_seen and recurse into it
                 if token.value.startswith("("):
                     from_seen = False
                     if isinstance(token, TokenList):
@@ -122,19 +142,32 @@ def extract_table_names_from_sql(sql: str) -> tuple[set[str], set[str]]:
                     continue
 
                 if isinstance(token, IdentifierList):
-                    for id_token in token.get_identifiers():
-                        raw_name = id_token.get_real_name() or id_token.value.split()[0]
-                        tables_referenced.add(_clean_identifier_name(raw_name).lower())
+                    for id_tok in token.get_identifiers():
+                        raw_name = id_tok.get_real_name() or id_tok.value.split()[0]
+                        parent_name = id_tok.get_parent_name()
+                        full_name = f"{parent_name}.{raw_name}" if parent_name else raw_name
+                        tables_referenced.add(_clean_identifier_name(full_name).lower())
                     from_seen = False
+                    _traverse(token)
                 elif isinstance(token, Identifier):
                     raw_name = token.get_real_name() or token.value.split()[0]
-                    tables_referenced.add(_clean_identifier_name(raw_name).lower())
+                    parent_name = token.get_parent_name()
+                    full_name = f"{parent_name}.{raw_name}" if parent_name else raw_name
+                    tables_referenced.add(_clean_identifier_name(full_name).lower())
                     from_seen = False
+                    _traverse(token)
+                elif isinstance(token, Function):
+                    fn_name = token.get_real_name() or token.value.split("(")[0]
+                    tables_referenced.add(_clean_identifier_name(fn_name).lower())
+                    from_seen = False
+                    _traverse(token)
                 elif token.ttype in (Name, Keyword):
                     tables_referenced.add(_clean_identifier_name(token.value).lower())
                     from_seen = False
                 elif token.is_keyword:
                     from_seen = False
+            elif isinstance(token, TokenList):
+                _traverse(token)
 
     _traverse(statement)
     return tables_referenced, cte_names
@@ -186,12 +219,26 @@ def validate_sql(sql: str, allowed_tables: Iterable[str] | None = None) -> str:
         allowed_set = {t.lower() for t in allowed_tables}
         # Also include legacy table name if needed
         allowed_set.add("uploaded_data")
+
+        if not allowed_set:
+            raise SQLValidationError("No tables are authorized for this dataset query.")
+
         referenced_tables, cte_names = extract_table_names_from_sql(cleaned_no_comments)
         for tbl in referenced_tables:
             # Skip if it's a CTE or known safe built-in table function
             if tbl in cte_names or tbl in ("generate_series", "range", "unnest", "values"):
                 continue
-            if tbl not in allowed_set:
+
+            # Check schema qualification
+            if "." in tbl:
+                parts = tbl.split(".")
+                schema_part, table_part = parts[0], parts[-1]
+                if schema_part != "main" or table_part not in allowed_set:
+                    raise SQLValidationError(
+                        f"Access to unauthorized schema or table '{tbl}' is forbidden. "
+                        f"Allowed tables: {sorted(list(allowed_set))}"
+                    )
+            elif tbl not in allowed_set:
                 raise SQLValidationError(
                     f"Access to unauthorized or unknown table '{tbl}' is forbidden. "
                     f"Allowed tables: {sorted(list(allowed_set))}"

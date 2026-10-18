@@ -31,7 +31,16 @@ class DuckDBManager:
     def __init__(self) -> None:
         self._connections: dict[str, duckdb.DuckDBPyConnection] = {}
         self._table_names: dict[str, list[str]] = {}    # dataset_id -> list of table names
+        self._owners: dict[str, str] = {}               # dataset_id -> owner user_id
         self._lock = threading.Lock()
+
+    def set_dataset_owner(self, dataset_id: str, owner_id: str) -> None:
+        with self._lock:
+            self._owners[dataset_id] = owner_id
+
+    def get_dataset_owner(self, dataset_id: str) -> str | None:
+        with self._lock:
+            return self._owners.get(dataset_id)
 
     def create_connection(
         self, dataset_id: str, table_name: str = TABLE_NAME
@@ -43,6 +52,12 @@ class DuckDBManager:
                     self._table_names[dataset_id].append(table_name)
                 return self._connections[dataset_id]
             conn = duckdb.connect(database=":memory:")
+            # Enforce resource safeguards on connection
+            try:
+                conn.execute("SET threads = 2")
+                conn.execute("SET max_memory = '512MB'")
+            except Exception:
+                pass
             self._connections[dataset_id] = conn
             self._table_names[dataset_id] = [table_name]
             return conn
@@ -83,9 +98,10 @@ class DuckDBManager:
         return conn
 
     def get_connection(self, dataset_id: str) -> duckdb.DuckDBPyConnection:
-        conn = self._connections.get(dataset_id)
-        if conn is not None:
-            return conn
+        with self._lock:
+            conn = self._connections.get(dataset_id)
+            if conn is not None:
+                return conn
 
         # Attempt auto-recovery from disk files if backend restarted
         recovered = self._try_auto_recover(dataset_id)
@@ -96,27 +112,45 @@ class DuckDBManager:
 
     def get_table_name(self, dataset_id: str) -> str:
         """Return the first DuckDB table name for this dataset (backward compat)."""
-        if dataset_id not in self._connections:
+        with self._lock:
+            if dataset_id not in self._connections:
+                conn = None
+            else:
+                conn = self._connections[dataset_id]
+
+        if conn is None:
             self._try_auto_recover(dataset_id)
-        names = self._table_names.get(dataset_id, [self.TABLE_NAME])
-        return names[0] if names else self.TABLE_NAME
+
+        with self._lock:
+            names = self._table_names.get(dataset_id, [self.TABLE_NAME])
+            return names[0] if names else self.TABLE_NAME
 
     def get_table_names(self, dataset_id: str) -> list[str]:
         """Return all DuckDB table names for this dataset."""
-        if dataset_id not in self._connections:
+        with self._lock:
+            if dataset_id not in self._connections:
+                conn = None
+            else:
+                conn = self._connections[dataset_id]
+
+        if conn is None:
             self._try_auto_recover(dataset_id)
-        return list(self._table_names.get(dataset_id, []))
+
+        with self._lock:
+            return list(self._table_names.get(dataset_id, []))
 
     def drop_connection(self, dataset_id: str) -> None:
         with self._lock:
             conn = self._connections.pop(dataset_id, None)
             self._table_names.pop(dataset_id, None)
+            self._owners.pop(dataset_id, None)
             if conn is not None:
                 conn.close()
 
     def exists(self, dataset_id: str) -> bool:
-        if dataset_id in self._connections:
-            return True
+        with self._lock:
+            if dataset_id in self._connections:
+                return True
         return self._try_auto_recover(dataset_id) is not None
 
 

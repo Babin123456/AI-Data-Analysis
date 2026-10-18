@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,8 @@ from app.db.duckdb_manager import duckdb_manager, filename_to_table_name
 from app.models.schemas import DatasetSchema, FileInfo, UploadResponse
 from app.services.file_loader import UnsupportedFileError, file_loader
 from app.services.schema_service import extract_table_schema
+from app.utils.auth import get_current_user
+from app.utils.dataset_auth import authorize_dataset_access, record_dataset_ownership
 from app.utils.file_utils import (
     is_allowed_extension,
     new_dataset_id,
@@ -32,6 +34,7 @@ router = APIRouter(prefix="/api/upload", tags=["upload"])
 async def upload_dataset(
     files: List[UploadFile] = File(...),
     dataset_id: Optional[str] = Form(None),
+    current_user: dict = Depends(get_current_user),
 ) -> UploadResponse:
     if not files:
         raise HTTPException(status_code=400, detail="No files provided.")
@@ -42,7 +45,13 @@ async def upload_dataset(
             detail=f"Too many files. Maximum {MAX_FILES} files allowed per upload.",
         )
 
-    if not dataset_id or not duckdb_manager.exists(dataset_id):
+    if dataset_id:
+        if duckdb_manager.exists(dataset_id):
+            # Verify the authenticated user owns this dataset before allowing additions
+            authorize_dataset_access(dataset_id, current_user)
+        else:
+            dataset_id = new_dataset_id()
+    else:
         dataset_id = new_dataset_id()
 
     file_infos: list[FileInfo] = []
@@ -135,6 +144,14 @@ async def upload_dataset(
         if len(duckdb_manager.get_table_names(dataset_id)) == 0:
             duckdb_manager.drop_connection(dataset_id)
         raise HTTPException(status_code=400, detail="Failed to process uploaded files. Please verify file formats.")
+
+    # Record persistent ownership for the authenticated user
+    record_dataset_ownership(
+        dataset_id=dataset_id,
+        user=current_user,
+        filenames=[f.filename for f in file_infos],
+        table_names=[f.table_name for f in file_infos],
+    )
 
     return UploadResponse(
         dataset_id=dataset_id,

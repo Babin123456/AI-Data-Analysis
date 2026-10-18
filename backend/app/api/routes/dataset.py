@@ -1,20 +1,28 @@
-"""Dataset lifecycle endpoints: fetch schema again, and delete/cleanup."""
+"""Dataset lifecycle endpoints: fetch schema, preview rows, and delete/cleanup with ownership checks."""
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.db.duckdb_manager import duckdb_manager
 from app.models.schemas import DatasetSchema
-from app.services.schema_service import extract_all_schemas, extract_schema, invalidate_schema_cache
+from app.services.schema_service import extract_all_schemas, extract_schema
+from app.utils.auth import get_current_user
+from app.utils.dataset_auth import authorize_dataset_access, delete_dataset_with_ownership
 from app.validation.sql_validator import escape_sql_identifier
 
 router = APIRouter(prefix="/api/dataset", tags=["dataset"])
 
 
 @router.get("/{dataset_id}/schema", response_model=DatasetSchema)
-async def get_schema(dataset_id: str) -> DatasetSchema:
+async def get_schema(
+    dataset_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> DatasetSchema:
+    # 1. Authorize dataset ownership
+    authorize_dataset_access(dataset_id, current_user)
+
     try:
         conn = duckdb_manager.get_connection(dataset_id)
     except KeyError as exc:
@@ -23,7 +31,13 @@ async def get_schema(dataset_id: str) -> DatasetSchema:
 
 
 @router.get("/{dataset_id}/schemas", response_model=list[DatasetSchema])
-async def get_all_schemas(dataset_id: str) -> list[DatasetSchema]:
+async def get_all_schemas(
+    dataset_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> list[DatasetSchema]:
+    # 1. Authorize dataset ownership
+    authorize_dataset_access(dataset_id, current_user)
+
     try:
         conn = duckdb_manager.get_connection(dataset_id)
     except KeyError as exc:
@@ -31,14 +45,15 @@ async def get_all_schemas(dataset_id: str) -> list[DatasetSchema]:
     return extract_all_schemas(conn, dataset_id)
 
 
-
 @router.get("/{dataset_id}/preview")
-async def get_preview(dataset_id: str) -> dict[str, list[dict[str, Any]]]:
-    """Return the first 100 rows for every table in this dataset.
+async def get_preview(
+    dataset_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, list[dict[str, Any]]]:
+    """Return the first 100 rows for every table in this dataset."""
+    # 1. Authorize dataset ownership
+    authorize_dataset_access(dataset_id, current_user)
 
-    Used by the frontend to restore preview data after a page refresh
-    without bloating sessionStorage. Shape: { table_name: [row, ...] }
-    """
     try:
         conn = duckdb_manager.get_connection(dataset_id)
     except KeyError as exc:
@@ -58,22 +73,9 @@ async def get_preview(dataset_id: str) -> dict[str, list[dict[str, Any]]]:
 
 
 @router.delete("/{dataset_id}")
-async def delete_dataset(dataset_id: str) -> dict:
-    if not duckdb_manager.exists(dataset_id):
-        raise HTTPException(status_code=404, detail="Dataset not found or expired.")
-    duckdb_manager.drop_connection(dataset_id)
-    invalidate_schema_cache(dataset_id)
-
-    # Clean up disk files
-    from pathlib import Path
-    from app.config import settings
-    upload_dir = Path(settings.upload_dir)
-    if upload_dir.exists():
-        prefix = f"{dataset_id}_"
-        for f in upload_dir.glob(f"{prefix}*"):
-            f.unlink(missing_ok=True)
-
-    return {"status": "deleted", "dataset_id": dataset_id}
-
-
-
+async def delete_dataset(
+    dataset_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Verify ownership and delete dataset across memory, disk, and MongoDB."""
+    return delete_dataset_with_ownership(dataset_id, current_user)

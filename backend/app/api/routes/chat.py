@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.db.duckdb_manager import duckdb_manager
 from app.models.schemas import ChatRequest, ChatResponse
@@ -15,6 +15,8 @@ from app.services.dataset_explainer import explain_dataset
 from app.services.intent_service import intent_service
 from app.services.schema_service import extract_all_schemas
 from app.services.sql_pipeline import sql_pipeline
+from app.utils.auth import get_current_user
+from app.utils.dataset_auth import authorize_dataset_access
 from app.utils.rate_limit import chat_limiter
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,11 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
 @router.post("", response_model=ChatResponse)
-async def chat(req: ChatRequest, request: Request) -> ChatResponse:
+async def chat(
+    req: ChatRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+) -> ChatResponse:
     start_time = time.time()
     request_id = str(uuid.uuid4())
 
@@ -39,13 +45,8 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         len(req.question),
     )
 
-    # 2. Dataset Authorization & Retrieval
-    if not duckdb_manager.exists(req.dataset_id):
-        logger.warning("Dataset not found or expired: %s", req.dataset_id)
-        raise HTTPException(
-            status_code=404,
-            detail="Dataset session not found or expired. Please upload or reload your dataset.",
-        )
+    # 2. Dataset Ownership Authorization & Retrieval
+    authorize_dataset_access(req.dataset_id, current_user)
 
     try:
         conn = duckdb_manager.get_connection(req.dataset_id)

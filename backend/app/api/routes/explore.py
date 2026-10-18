@@ -6,12 +6,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from app.db.duckdb_manager import duckdb_manager
 from app.models.schemas import ExploreRequest
 from app.services.chart_service import build_chart_spec
+from app.utils.auth import get_current_user
+from app.utils.dataset_auth import authorize_dataset_access
 from app.validation.sql_validator import escape_sql_identifier
 
 logger = logging.getLogger(__name__)
@@ -63,8 +65,14 @@ def _make_error_response(
 
 
 @router.post("")
-async def explore(req: ExploreRequest) -> Any:
-    # 1. Validate dataset existence and connection
+async def explore(
+    req: ExploreRequest,
+    current_user: dict = Depends(get_current_user),
+) -> Any:
+    # 1. Authorize dataset ownership (fails closed on unowned or cross-user datasets)
+    authorize_dataset_access(req.dataset_id, current_user)
+
+    # 2. Validate connection
     try:
         conn = duckdb_manager.get_connection(req.dataset_id)
     except KeyError:

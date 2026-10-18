@@ -5,7 +5,7 @@ from app.utils.auth import get_current_user
 
 
 async def _global_mock_get_current_user():
-    return {"username": "testuser", "email": "test@example.com", "role": "user"}
+    return {"id": "testuser_id", "username": "testuser", "email": "test@example.com", "role": "user"}
 
 
 @pytest.fixture(autouse=True)

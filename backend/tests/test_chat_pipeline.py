@@ -52,6 +52,7 @@ async def mock_auth_user():
 @pytest.fixture(scope="module", autouse=True)
 def setup_test_dataset():
     """Create in-memory DuckDB dataset for test assertions."""
+    duckdb_manager.set_dataset_owner(TEST_DATASET_ID, "analyst_test")
     conn = duckdb_manager.create_connection(TEST_DATASET_ID, table_name=TEST_TABLE_NAME)
     conn.execute(f"""
         CREATE TABLE {TEST_TABLE_NAME} (
