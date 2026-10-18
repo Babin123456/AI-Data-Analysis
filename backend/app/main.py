@@ -1,6 +1,5 @@
-"""FastAPI application entrypoint."""
-from __future__ import annotations
-
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,6 +7,7 @@ import logging
 from app.api.routes import chat, dataset, download, explore, upload, auth, sql_editor, admin
 from app.config import settings
 from app.db.duckdb_manager import duckdb_manager
+from app.db.mongodb import close_mongo_connection, connect_to_mongo
 from app.services.schema_service import invalidate_schema_cache
 from app.utils.auth import get_current_user
 from app.utils.logger_streamer import memory_log_handler
@@ -17,10 +17,41 @@ root_logger = logging.getLogger()
 if memory_log_handler not in root_logger.handlers:
     root_logger.addHandler(memory_log_handler)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ── Startup ─────────────────────────────────────────────────────────────
+    try:
+        connect_to_mongo()
+    except Exception as exc:
+        if settings.app_env == "testing" and not settings.mongodb_required:
+            root_logger.warning("MongoDB connection skipped in testing environment: %s", exc)
+        else:
+            root_logger.error("Failed to connect to MongoDB during startup: %s", exc)
+            raise
+
+    cleanup_task = asyncio.create_task(duckdb_manager.start_periodic_cleanup())
+    root_logger.info("Application startup complete: DuckDB cleanup worker started.")
+
+    yield
+
+    # ── Shutdown ────────────────────────────────────────────────────────────
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
+
+    duckdb_manager.close_all_connections()
+    close_mongo_connection()
+    root_logger.info("Application shutdown complete: database connections closed.")
+
+
 app = FastAPI(
     title="AI Data Analysis API",
     description="Upload structured data and analyze it with natural language.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(

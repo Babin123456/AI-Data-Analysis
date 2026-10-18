@@ -35,9 +35,15 @@ class Settings:
     )
     allowed_extensions: tuple[str, ...] = (".csv", ".xlsx", ".xls", ".db", ".sqlite", ".sql")
 
+    # DuckDB Lifecycle & Eviction Config
+    duckdb_idle_timeout_seconds: int = int(os.getenv("DUCKDB_IDLE_TIMEOUT_SECONDS", "7200"))
+    duckdb_cleanup_interval_seconds: int = int(os.getenv("DUCKDB_CLEANUP_INTERVAL_SECONDS", "300"))
+    duckdb_max_connections: int = int(os.getenv("DUCKDB_MAX_CONNECTIONS", "50"))
+
     # MongoDB Config
     mongodb_uri: str = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
     database_name: str = os.getenv("DATABASE_NAME", "Ai-data-analyst")
+    mongodb_required: bool = os.getenv("MONGODB_REQUIRED", "false").lower() == "true"
 
     # JWT Config
     secret_key: str = os.getenv("SECRET_KEY", "your-secret-key")

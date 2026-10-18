@@ -1,5 +1,11 @@
 """Global pytest fixtures for backend tests."""
+import os
+os.environ["APP_ENV"] = "testing"
+
 import pytest
+from app.config import settings
+settings.app_env = "testing"
+
 from app.main import app
 from app.utils.auth import get_current_user
 

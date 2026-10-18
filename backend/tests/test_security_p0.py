@@ -27,9 +27,15 @@ TABLE_NAME = "financial_records"
 def setup_dataset():
     # Setup test dataset
     duckdb_manager.drop_connection(DATASET_ID)
-    conn = duckdb_manager.create_connection(DATASET_ID, table_name=TABLE_NAME)
+    from pathlib import Path
+    from app.config import settings
+    upload_dir = Path(settings.upload_dir)
+    (upload_dir / f"{DATASET_ID}.duckdb").unlink(missing_ok=True)
+    (upload_dir / f"{DATASET_ID}.duckdb.wal").unlink(missing_ok=True)
+
+    conn = duckdb_manager.create_connection(DATASET_ID, table_name=TABLE_NAME, read_only=False)
     conn.execute(f"""
-        CREATE TABLE {TABLE_NAME} AS
+        CREATE OR REPLACE TABLE {TABLE_NAME} AS
         SELECT range AS id, 'item_' || range AS name, range * 10.5 AS amount
         FROM range(1000)
     """)
@@ -37,6 +43,9 @@ def setup_dataset():
     record_dataset_ownership(DATASET_ID, OWNER_USER, filenames=["finance.csv"], table_names=[TABLE_NAME])
     yield
     duckdb_manager.drop_connection(DATASET_ID)
+    (upload_dir / f"{DATASET_ID}.duckdb").unlink(missing_ok=True)
+    (upload_dir / f"{DATASET_ID}.duckdb.wal").unlink(missing_ok=True)
+    (upload_dir / f"{DATASET_ID}.meta.json").unlink(missing_ok=True)
 
 
 # ─── P0: IDOR & Dataset Ownership Authorization Tests ────────────────────────
@@ -84,8 +93,8 @@ def test_unauthenticated_request_rejected():
 
 def test_legacy_unowned_dataset_fails_closed():
     unowned_id = "legacy_unowned_999"
-    conn = duckdb_manager.create_connection(unowned_id, table_name="legacy_data")
-    conn.execute("CREATE TABLE legacy_data (col INT)")
+    conn = duckdb_manager.create_connection(unowned_id, table_name="legacy_data", read_only=False)
+    conn.execute("CREATE OR REPLACE TABLE legacy_data (col INT)")
 
     app.dependency_overrides[get_current_user] = lambda: OWNER_USER
     client = TestClient(app)
@@ -94,6 +103,11 @@ def test_legacy_unowned_dataset_fails_closed():
     assert res.status_code == 404
 
     duckdb_manager.drop_connection(unowned_id)
+    from pathlib import Path
+    from app.config import settings
+    upload_dir = Path(settings.upload_dir)
+    (upload_dir / f"{unowned_id}.duckdb").unlink(missing_ok=True)
+    (upload_dir / f"{unowned_id}.meta.json").unlink(missing_ok=True)
 
 
 def test_non_owner_cannot_delete_dataset():

@@ -179,12 +179,15 @@ def delete_dataset_with_ownership(dataset_id: str, user: dict[str, Any]) -> dict
     from app.services.schema_service import invalidate_schema_cache
     invalidate_schema_cache(dataset_id)
 
-    # 3. Clean up uploaded disk files and metadata file
+    # 3. Clean up uploaded disk files, persistent .duckdb database, and metadata file
     upload_dir = Path(settings.upload_dir)
     if upload_dir.exists():
         prefix = f"{dataset_id}_"
         for f in upload_dir.glob(f"{prefix}*"):
             f.unlink(missing_ok=True)
+        # Clean up persistent DuckDB files
+        (upload_dir / f"{dataset_id}.duckdb").unlink(missing_ok=True)
+        (upload_dir / f"{dataset_id}.duckdb.wal").unlink(missing_ok=True)
         meta_path = _get_meta_path(dataset_id)
         meta_path.unlink(missing_ok=True)
 

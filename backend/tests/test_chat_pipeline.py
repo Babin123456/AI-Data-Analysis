@@ -51,11 +51,14 @@ async def mock_auth_user():
 
 @pytest.fixture(scope="module", autouse=True)
 def setup_test_dataset():
-    """Create in-memory DuckDB dataset for test assertions."""
-    duckdb_manager.set_dataset_owner(TEST_DATASET_ID, "analyst_test")
-    conn = duckdb_manager.create_connection(TEST_DATASET_ID, table_name=TEST_TABLE_NAME)
+    """Create persistent test dataset for test assertions."""
+    from app.utils.dataset_auth import record_dataset_ownership
+    from pathlib import Path
+    from app.config import settings
+
+    conn = duckdb_manager.create_connection(TEST_DATASET_ID, table_name=TEST_TABLE_NAME, read_only=False)
     conn.execute(f"""
-        CREATE TABLE {TEST_TABLE_NAME} (
+        CREATE OR REPLACE TABLE {TEST_TABLE_NAME} (
             id INTEGER,
             category VARCHAR,
             region VARCHAR,
@@ -71,8 +74,13 @@ def setup_test_dataset():
         (4, 'Clothing', 'West', 75.0, 3),
         (5, 'Furniture', 'North', 300.0, 2)
     """)
+    record_dataset_ownership(TEST_DATASET_ID, {"username": "analyst_test"}, filenames=["sales.csv"], table_names=[TEST_TABLE_NAME])
     yield
     duckdb_manager.drop_connection(TEST_DATASET_ID)
+    upload_dir = Path(settings.upload_dir)
+    (upload_dir / f"{TEST_DATASET_ID}.duckdb").unlink(missing_ok=True)
+    (upload_dir / f"{TEST_DATASET_ID}.duckdb.wal").unlink(missing_ok=True)
+    (upload_dir / f"{TEST_DATASET_ID}.meta.json").unlink(missing_ok=True)
 
 
 @pytest.fixture

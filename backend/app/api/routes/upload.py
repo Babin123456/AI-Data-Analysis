@@ -104,7 +104,7 @@ async def upload_dataset(
         try:
             dest_path.write_bytes(contents)
 
-            conn = duckdb_manager.create_connection(dataset_id, table_name=table_name)
+            conn = duckdb_manager.create_connection(dataset_id, table_name=table_name, read_only=False)
             is_multi = len(files) > 1 or len(existing_tables) > 0
             file_loader.load(conn, dest_path, safe_name, create_alias=not is_multi)
 
@@ -152,6 +152,9 @@ async def upload_dataset(
         filenames=[f.filename for f in file_infos],
         table_names=[f.table_name for f in file_infos],
     )
+
+    # Transition persistent DuckDB database to read-only mode so multiple workers can query concurrently
+    duckdb_manager.transition_to_read_only(dataset_id)
 
     return UploadResponse(
         dataset_id=dataset_id,
