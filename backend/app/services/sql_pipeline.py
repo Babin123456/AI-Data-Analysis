@@ -110,12 +110,18 @@ class SQLPipeline:
 
         # 1. Generate initial SQL
         try:
-            raw_sql = llm_service.generate_sql(
+            # Generate SQL and parameters as structured JSON
+            generation_result = llm_service.generate_sql(
                 question=question,
                 schema=schemas,
                 target_table=target_table,
                 conversation_context=conversation_context,
             )
+            # Expect a dict with keys 'sql' and 'params'
+            if not isinstance(generation_result, dict) or 'sql' not in generation_result:
+                raise LLMServiceError('LLM did not return structured JSON with sql field')
+            raw_sql = generation_result['sql']
+            sql_params = generation_result.get('params', [])
         except LLMServiceError as exc:
             logger.error("LLM SQL generation error: %s", exc)
             return SQLPipelineResult(
@@ -134,6 +140,7 @@ class SQLPipeline:
             )
 
         current_sql = raw_sql
+        current_params = sql_params
         last_error_msg = ""
         repair_attempts = 0
 
@@ -156,14 +163,22 @@ class SQLPipeline:
                 if repair_attempts < MAX_REPAIR_ATTEMPTS:
                     repair_attempts += 1
                     logger.info("Attempting SQL repair #%d for validation error: %s", repair_attempts, err_msg)
-                    current_sql = self._attempt_repair(
+                    repaired_output = self._attempt_repair(
                         question=question,
                         failed_sql=current_sql,
                         error_msg=err_msg,
                         schemas=schemas,
                         target_table=target_table,
                     )
-                    if current_sql:
+                    if repaired_output:
+                        # Expect repaired_output to be JSON like original generation
+                        try:
+                            repaired_json = json.loads(repaired_output)
+                            current_sql = repaired_json.get('sql', current_sql)
+                            current_params = repaired_json.get('params', current_params)
+                        except Exception:
+                            # Fallback to raw string if JSON parsing fails
+                            current_sql = repaired_output
                         continue
                 return SQLPipelineResult(
                     success=False,
@@ -174,8 +189,9 @@ class SQLPipeline:
 
             # 3. Execute SQL safely against DuckDB
             try:
+                # Execute safe SQL with parameter binding and row limit
                 bounded_sql = f"SELECT * FROM ({safe_sql}) LIMIT {QUERY_ROW_LIMIT}"
-                df = conn.execute(bounded_sql).fetch_df()
+                df = conn.execute(bounded_sql, current_params).fetch_df()
                 columns = list(df.columns)
                 rows = sanitize_records(df.to_dict(orient="records"))
 
@@ -212,15 +228,20 @@ class SQLPipeline:
                 if repair_attempts < MAX_REPAIR_ATTEMPTS:
                     repair_attempts += 1
                     logger.info("Attempting SQL repair #%d for execution error: %s", repair_attempts, last_error_msg)
-                    repaired = self._attempt_repair(
+                    repaired_output = self._attempt_repair(
                         question=question,
                         failed_sql=safe_sql,
                         error_msg=last_error_msg,
                         schemas=schemas,
                         target_table=target_table,
                     )
-                    if repaired and repaired != safe_sql:
-                        current_sql = repaired
+                    if repaired_output and repaired_output != safe_sql:
+                        try:
+                            repaired_json = json.loads(repaired_output)
+                            current_sql = repaired_json.get('sql', safe_sql)
+                            current_params = repaired_json.get('params', current_params)
+                        except Exception:
+                            current_sql = repaired_output
                         continue
 
                 # All repair attempts exhausted
